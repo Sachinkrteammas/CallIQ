@@ -1,5 +1,6 @@
 import json
 from functools import lru_cache
+from typing import List
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -52,7 +53,7 @@ class Settings(BaseSettings):
     sql_db_url3: str = Field(default="", alias="SQL_DB_URL3")
 
     @property
-    def cors_origins_list(self) -> list[str]:
+    def cors_origins_list(self) -> List[str]:
         raw = self.cors_origins.strip()
         if not raw:
             return []
