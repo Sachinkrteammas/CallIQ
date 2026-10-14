@@ -1,164 +1,104 @@
-import React, { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Card, SectionTitle, SeverityBadge, ProgressBar, Trend } from '../components/shared.jsx'
-import { COACHING_QUEUE } from '../data/mock.js'
-import { getClientAgents, getClientTeamHealth } from '../api/client.js'
-import { useClientFilter, getDateRange } from '../components/ClientContext.jsx'
-import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer } from 'recharts'
-import { TrendingUp, Target, Award, RefreshCw, AlertTriangle, Calendar, Building2 } from 'lucide-react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
+} from 'recharts'
+import { Card } from '../components/shared.jsx'
+import {
+  listAgents, getAgentScoreByParameter, getAgentComparison,
+  getAgentSubParameterDrilldown, getAgentCoaching, getAgentLeaderboard
+} from '../api/client.js'
+import { useClientFilter } from '../components/ClientContext.jsx'
+import {
+  Search, RefreshCw, Users, Trophy, Award, TrendingUp,
+  AlertTriangle, ChevronDown, Filter, Lightbulb
+} from 'lucide-react'
 
-const riskColor = { Low: 'text-[#1C9A6C]', Medium: 'text-[#C9862B]', High: 'text-[#D14343]', Critical: 'text-[#D14343] font-bold' }
+const PARAMS = [
+  { key: 'opening', label: 'Opening' },
+  { key: 'customer_understanding', label: 'Customer Understanding' },
+  { key: 'resolution_quality', label: 'Resolution Quality' },
+  { key: 'communication', label: 'Communication' },
+  { key: 'call_control', label: 'Call Control' },
+  { key: 'process_adherence', label: 'Process Adherence' },
+  { key: 'closing', label: 'Closing' },
+]
 
-const teamNameMap = {
-  blank_call: 'Blank Call',
-  bill_request: 'Bill Request',
-  purchase_query: 'Purchase Query',
-  complaint_call: 'Complaint Call',
-  ac_installation_coordination: 'AC Installation',
-  inbound: 'Inbound Support',
-  outbound: 'Outbound Sales',
-  retention: 'Retention',
-  billing: 'Billing',
-  technical: 'Technical Support',
-  sales: 'Sales',
-  onboarding: 'Onboarding',
-  support: 'Customer Support',
-  unknown: 'Unassigned',
+const RAG = {
+  green: { bg: '#E7F7EF', text: '#1C9A6C' },
+  amber: { bg: '#FCF1DF', text: '#C9862B' },
+  red: { bg: '#FBE9E9', text: '#D14343' },
+}
+
+function ragOf(pct) {
+  if (pct >= 80) return RAG.green
+  if (pct >= 60) return RAG.amber
+  return RAG.red
 }
 
 export default function Agents() {
-  const [searchParams, setSearchParams] = useSearchParams()
-  const agentParam = searchParams.get('agent')
-  const { clientId, clients, setClientId, selectedClient, isAllClients, fromDate, toDate, setFromDate, setToDate, clientType } = useClientFilter()
+  const navigate = useNavigate()
+  const { clientId, clients, setClientId, selectedClient, isAllClients, clientType, fromDate, toDate, setFromDate, setToDate } = useClientFilter()
 
   const [agents, setAgents] = useState([])
-  const [teamHealth, setTeamHealth] = useState([])
+  const [leaderboard, setLeaderboard] = useState([])
+  const [comparison, setComparison] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [selectedAgent, setSelectedAgent] = useState(agentParam || null)
-  const [sortKey, setSortKey] = useState('avg_score')
-  const [sortDir, setSortDir] = useState('desc')
-  const [refreshKey, setRefreshKey] = useState(0)
-  const navigate = useNavigate()
+  const [search, setSearch] = useState('')
+  const [selectedAgent, setSelectedAgent] = useState(null)
+  const [agentParams, setAgentParams] = useState(null)
+  const [agentDrill, setAgentDrill] = useState(null)
+  const [agentCoach, setAgentCoach] = useState(null)
+  const [agentCoachAll, setAgentCoachAll] = useState([])
+  const [showComparison, setShowComparison] = useState(false)
 
-  useEffect(() => {
-    if (!clientId || isAllClients) {
-      setLoading(false)
-      return
-    }
-    let cancelled = false
-    setLoading(true)
-    setError(null)
+  const fetchAgents = useCallback(() => {
+    setLoading(true); setError(null)
+    const params = {}
+    if (clientId && clientId !== 'all') params.client_id = clientId
+    if (search) params.q = search
+
     Promise.all([
-      getClientAgents(clientId, fromDate, toDate, clientType),
-      getClientTeamHealth(clientId, fromDate, toDate, clientType),
+      listAgents(params).catch(() => ({ agents: [] })),
+      getAgentLeaderboard(params).catch(() => ({ leaderboard: [] })),
+      getAgentComparison(params).catch(() => null),
     ])
-      .then(([agentRes, teamRes]) => {
-        if (!cancelled) {
-          setAgents(agentRes.agents || [])
-          setTeamHealth(teamRes.teams || [])
-          setLoading(false)
-        }
+      .then(([agentsRes, lbRes, compRes]) => {
+        setAgents(agentsRes?.agents || [])
+        setLeaderboard(lbRes?.leaderboard || [])
+        setComparison(compRes)
+        setLoading(false)
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err.message || 'Failed to load data')
-          setLoading(false)
-        }
-      })
-    return () => { cancelled = true }
-  }, [clientId, fromDate, toDate, clientType, refreshKey])
+      .catch((err) => { setError(err.message || 'Failed'); setLoading(false) })
+  }, [clientId, search])
 
-  const handlePreset = (days) => {
-    const range = getDateRange(days)
-    setFromDate(range.from)
-    setToDate(range.to)
+  useEffect(() => { fetchAgents() }, [fetchAgents])
+
+  const loadAgentDetails = async (agentId) => {
+    setSelectedAgent(agentId)
+    setAgentParams(null); setAgentDrill(null); setAgentCoach(null)
+
+    const params = {}
+    if (clientId && clientId !== 'all') params.client_id = clientId
+    if (fromDate) params.from_date = fromDate
+    if (toDate) params.to_date = toDate
+
+    Promise.all([
+      getAgentScoreByParameter(agentId, params).catch(() => null),
+      getAgentSubParameterDrilldown(agentId, params).catch(() => null),
+      getAgentCoaching(agentId, params).catch(() => null),
+    ]).then(([p, d, c]) => {
+      setAgentParams(p)
+      setAgentDrill(d)
+      setAgentCoach(c)
+    })
   }
 
-  useEffect(() => {
-    if (agentParam) setSelectedAgent(agentParam)
-  }, [agentParam])
-
-  useEffect(() => {
-    setSelectedAgent(null)
-  }, [clientId])
-
-  const sorted = [...agents].sort((a, b) => {
-    const dir = sortDir === 'asc' ? 1 : -1
-    return (a[sortKey] - b[sortKey]) * dir
-  })
-
-  const toggleSort = (key) => {
-    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(key); setSortDir('desc') }
-  }
-
-  const selectAgent = (id) => {
-    setSelectedAgent(id)
-    setSearchParams(prev => { prev.set('agent', id); return prev })
-  }
-
-  const agent = selectedAgent ? agents.find(a => a.id === selectedAgent) : null
-  const radarData = agent ? [
-    { dim: 'Conversation', value: agent.conversation_score },
-    { dim: 'Sentiment', value: agent.sentiment_score },
-    { dim: 'Professionalism', value: agent.professionalism },
-    { dim: 'Compliance', value: agent.compliance },
-    { dim: 'Avg Score', value: agent.avg_score },
-  ] : []
-
-  if (isAllClients) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-xl font-bold text-[#1D2433]">Agents</h1>
-          <p className="text-xs text-[#6B7385] mt-0.5">All Clients · {fromDate} to {toDate}</p>
-        </div>
-        <Card>
-          <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex items-center gap-2">
-              <Building2 size={14} className="text-[#6B7385]" />
-              <label className="text-xs font-semibold text-[#6B7385]">Client</label>
-              <select
-                value={clientId ?? ''}
-                onChange={(e) => setClientId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-                className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5] min-w-[160px]"
-              >
-                <option value="all">All Clients</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </Card>
-        <Card className="flex items-center justify-center h-64 text-sm text-[#6B7385]">
-          Select a specific client to view their agents
-        </Card>
-      </div>
-    )
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <RefreshCw size={32} className="text-[#3457D5] animate-spin mx-auto mb-3" />
-          <p className="text-sm text-[#6B7385] font-medium">Loading agents for {selectedClient ? selectedClient.name : 'client'}...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <AlertTriangle size={32} className="text-[#D14343] mx-auto mb-3" />
-          <p className="text-sm text-[#D14343] font-medium">{error}</p>
-        </div>
-      </div>
-    )
+  if (loading && !agents.length) {
+    return <div className="flex items-center justify-center h-96">
+      <RefreshCw size={32} className="text-[#3457D5] animate-spin" />
+    </div>
   }
 
   return (
@@ -166,215 +106,229 @@ export default function Agents() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#1D2433]">Agents</h1>
-          <p className="text-xs text-[#6B7385] mt-0.5">{selectedClient ? selectedClient.name : 'No client selected'} · {fromDate} to {toDate} · {agents.length} agents</p>
+          <p className="text-xs text-[#6B7385] mt-0.5">
+            {isAllClients ? 'All Clients' : selectedClient?.name || ''} · {agents.length} agents
+          </p>
         </div>
-        <button
-          onClick={() => setRefreshKey((k) => k + 1)}
-          disabled={loading}
-          className="flex items-center gap-1.5 text-xs font-semibold text-[#3457D5] hover:underline disabled:opacity-50"
-        >
-          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowComparison((v) => !v)}
+            className={`flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border ${
+              showComparison ? 'bg-[#3457D5] text-white border-[#3457D5]' : 'border-[#E7E2D8] hover:bg-[#F7F4EE]'
+            }`}>
+            <TrendingUp size={13} /> {showComparison ? 'Hide' : 'Show'} Comparison
+          </button>
+        </div>
       </div>
 
+      {/* Filter Bar */}
       <Card>
-        <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
-            <Building2 size={14} className="text-[#6B7385]" />
-            <label className="text-xs font-semibold text-[#6B7385]">Client</label>
-            <select
-              value={clientId ?? ''}
-              onChange={(e) => setClientId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5] min-w-[160px]"
-            >
+            <Filter size={13} className="text-[#6B7385]" />
+            <select value={clientId ?? ''} onChange={(e) => setClientId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white min-w-[140px]">
               <option value="all">All Clients</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <Calendar size={14} className="text-[#6B7385]" />
-            <label className="text-xs font-semibold text-[#6B7385]">From</label>
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#3457D5]"
-            />
+            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5" />
+            <span className="text-xs text-[#6B7385]">to</span>
+            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5" />
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-semibold text-[#6B7385]">To</label>
-            <input
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#3457D5]"
-            />
+          <div className="relative flex-1 max-w-xs ml-auto">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6B7385]" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search agent (IDC...)..."
+              className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-[#F7F4EE] border border-[#E7E2D8] focus:outline-none" />
           </div>
-          <div className="flex items-center gap-1.5">
-            {[7, 14, 30].map((d) => (
-              <button
-                key={d}
-                onClick={() => handlePreset(d)}
-                className="text-[10px] font-semibold px-2.5 py-1 rounded-full border border-[#E7E2D8] hover:border-[#3457D5]/40 text-[#6B7385] hover:text-[#3457D5] transition"
-              >
-                {d}D
-              </button>
-            ))}
-          </div>
+          <button onClick={fetchAgents} disabled={loading}
+            className="flex items-center gap-1.5 text-xs font-semibold text-[#3457D5] hover:underline disabled:opacity-50">
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
         </div>
       </Card>
 
-      {/* Team Health Cards */}
-      {teamHealth.length > 0 && (
-        <div>
-          <SectionTitle>Team Health</SectionTitle>
-          <div className="grid grid-cols-5 gap-4">
-            {teamHealth.slice(0, 5).map((t, i) => (
-              <Card key={t.team + i} className="cursor-pointer hover:border-[#3457D5]/40 transition-all">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-[#6B7385]">{teamNameMap[t.team?.toLowerCase()] || t.team}</span>
-                </div>
-                <div className="text-2xl font-bold text-[#1D2433]">{t.score}%</div>
-                <div className="text-[10px] text-[#6B7385] mt-1">{t.calls} calls · {t.agents} agents</div>
-                <div className={`text-[10px] font-semibold mt-2 px-2 py-0.5 rounded-full inline-block ${
-                  t.risk === 'Low' ? 'bg-[#E7F7EF] text-[#1C9A6C]' :
-                  t.risk === 'Medium' ? 'bg-[#FCF1DF] text-[#C9862B]' :
-                  'bg-[#D14343] text-white'
-                }`}>{t.risk}</div>
-              </Card>
-            ))}
+      {/* Leaderboard */}
+      {leaderboard.length > 0 && (
+        <Card>
+          <h3 className="text-[15px] font-semibold text-[#1D2433] mb-3 flex items-center gap-2">
+            <Trophy size={16} className="text-[#C9862B]" /> Agent Leaderboard
+          </h3>
+          <div className="grid grid-cols-5 gap-3">
+            {leaderboard.slice(0, 5).map((a) => {
+              const rag = ragOf(a.percentage)
+              const medal = a.rank === 1 ? '🥇' : a.rank === 2 ? '🥈' : a.rank === 3 ? '🥉' : `#${a.rank}`
+              return (
+                <button key={a.agent_id} onClick={() => loadAgentDetails(a.agent_id)}
+                  className="text-left p-3 rounded-xl border border-[#E7E2D8] hover:border-[#3457D5]/40 hover:shadow-md transition-all">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-lg">{medal}</span>
+                    <span className="text-[10px] text-[#6B7385]">{a.audits} audits</span>
+                  </div>
+                  <div className="text-xs font-bold text-[#1D2433] truncate">{a.agent_id}</div>
+                  <div className="text-xl font-bold mt-1" style={{ color: rag.text }}>{a.percentage}%</div>
+                  {a.fatal_count > 0 && (
+                    <div className="text-[9px] font-bold text-[#D14343] mt-1">
+                      {a.fatal_count} Fatal
+                    </div>
+                  )}
+                </button>
+              )
+            })}
           </div>
-        </div>
+        </Card>
       )}
 
-      <div className="grid grid-cols-3 gap-6">
-        {/* Agent Leaderboard */}
-        <Card className="col-span-2">
-          <SectionTitle>Agent Leaderboard</SectionTitle>
+      {/* Comparison Table (if toggled) */}
+      {showComparison && comparison?.comparison?.length > 0 && (
+        <Card>
+          <h3 className="text-[15px] font-semibold text-[#1D2433] mb-3">Parameter-wise Comparison</h3>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-[10px] text-[#6B7385] font-semibold uppercase border-b border-[#E7E2D8]">
                   <th className="py-2 pr-3">Agent</th>
-                  <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('avg_score')}>Avg Score</th>
-                  <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('conversation_score')}>Conversation</th>
-                  <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('sentiment_score')}>Sentiment</th>
-                  <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('compliance')}>Compliance</th>
-                  <th className="py-2 pr-3">Fatal</th>
-                  <th className="py-2 pr-3">Risk</th>
+                  {PARAMS.map((p) => <th key={p.key} className="py-2 pr-2 text-center">{p.label}</th>)}
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((a) => (
-                  <tr
-                    key={a.id}
-                    onClick={() => selectAgent(a.id)}
-                    className={`border-b border-[#E7E2D8]/70 hover:bg-[#F7F4EE] cursor-pointer transition ${selectedAgent === a.id ? 'bg-[#EEF1FE]' : ''}`}
-                  >
-                    <td className="py-2.5 pr-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white bg-[#3457D5]">{a.id.slice(-2)}</div>
-                        <span className="font-semibold text-[#1D2433]">{a.name}</span>
-                      </div>
-                    </td>
-                    <td className="py-2.5 pr-3 font-semibold">{a.avg_score}%</td>
-                    <td className="py-2.5 pr-3">{a.conversation_score}%</td>
-                    <td className="py-2.5 pr-3">{a.sentiment_score}%</td>
-                    <td className="py-2.5 pr-3">{a.compliance}%</td>
-                    <td className="py-2.5 pr-3 text-[#6B7385]">{a.fatal_count}</td>
-                    <td className={`py-2.5 pr-3 ${riskColor[a.risk]}`}>{a.risk}</td>
+                {comparison.comparison.slice(0, 15).map((row) => (
+                  <tr key={row.agent_id} className="border-b border-[#E7E2D8]/70 hover:bg-[#F7F4EE]/50">
+                    <td className="py-2 pr-3 font-semibold text-[#1D2433]">{row.agent_id}</td>
+                    {PARAMS.map((p) => {
+                      const d = row.parameters[p.key] || {}
+                      const rag = ragOf(d.percentage || 0)
+                      return (
+                        <td key={p.key} className="py-2 pr-2 text-center">
+                          <span className="font-semibold" style={{ color: rag.text }}>
+                            {d.percentage || 0}%
+                          </span>
+                        </td>
+                      )
+                    })}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         </Card>
+      )}
 
-        {/* Agent Profile Panel */}
-        <div className="space-y-6">
-          {agent ? (
-            <>
-              <Card>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold text-white bg-[#3457D5]">{agent.id.slice(-2)}</div>
-                  <div>
-                    <div className="text-sm font-bold text-[#1D2433]">{agent.name}</div>
-                    <div className="text-xs text-[#6B7385]">{agent.calls} calls audited</div>
-                  </div>
-                </div>
-                <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RadarChart data={radarData}>
-                      <PolarGrid stroke="#E7E2D8" />
-                      <PolarAngleAxis dataKey="dim" tick={{ fontSize: 10 }} />
-                      <Radar dataKey="value" stroke="#3457D5" fill="#3457D5" fillOpacity={0.2} />
-                    </RadarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-
-              <Card>
-                <SectionTitle icon={Target}>Parameter Breakdown</SectionTitle>
-                <ProgressBar label="Conversation" value={agent.conversation_score} />
-                <ProgressBar label="Sentiment" value={agent.sentiment_score} />
-                <ProgressBar label="Professionalism" value={agent.professionalism} />
-                <ProgressBar label="Compliance" value={agent.compliance} />
-              </Card>
-
-              <Card>
-                <SectionTitle icon={TrendingUp}>Risk Summary</SectionTitle>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-[#6B7385]">Fatal flags</span>
-                    <span className="font-semibold text-[#D14343]">{agent.fatal_count}</span>
-                  </div>
-                  <div className="flex justify-between text-xs">
-                    <span className="text-[#6B7385]">Low scores (&lt;60%)</span>
-                    <span className="font-semibold text-[#C9862B]">{agent.low_score_count}</span>
-                  </div>
-                  <div className="flex justify-between text-xs">
-                    <span className="text-[#6B7385]">Risk level</span>
-                    <span className={`font-semibold ${riskColor[agent.risk]}`}>{agent.risk}</span>
-                  </div>
-                </div>
-              </Card>
-            </>
-          ) : (
-            <Card className="flex items-center justify-center h-64 text-sm text-[#6B7385]">
-              Click an agent to view their profile
-            </Card>
-          )}
-        </div>
-      </div>
-
-      {/* AI Coaching Recommendations */}
+      {/* Agents Grid */}
       <Card>
-        <SectionTitle icon={Award}>AI Coaching Recommendations</SectionTitle>
-        <div className="grid grid-cols-2 gap-4">
-          {COACHING_QUEUE.slice(0, 6).map((c) => (
-            <div key={c.id} className="border border-[#E7E2D8] rounded-xl p-4 hover:border-[#3457D5]/30 transition">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-semibold text-sm text-[#1D2433]">{c.agent_name}</span>
-                <SeverityBadge level={c.status === 'Escalated' ? 'High' : c.status === 'Completed' ? 'Low' : 'Medium'} />
-              </div>
-              <p className="text-xs text-[#6B7385] mb-2 line-clamp-2">{c.recommendation}</p>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#1C9A6C]">{c.estimated_improvement}</span>
-                <button
-                  disabled={c.status !== 'Needs Coaching'}
-                  onClick={() => navigate('/coaching')}
-                  className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-[#16213E] text-white disabled:opacity-40"
-                >
-                  {c.status === 'Needs Coaching' ? 'Assign Training' : c.status}
-                </button>
-              </div>
-            </div>
-          ))}
+        <h3 className="text-[15px] font-semibold text-[#1D2433] mb-3">
+          All Agents ({agents.length})
+        </h3>
+        <div className="grid grid-cols-3 gap-3">
+          {agents.map((a) => {
+            const rag = ragOf(a.percentage)
+            return (
+              <button key={a.agent_id} onClick={() => loadAgentDetails(a.agent_id)}
+                className={`text-left p-4 rounded-xl border transition-all ${
+                  selectedAgent === a.agent_id ? 'border-[#3457D5] bg-[#EEF1FE]' : 'border-[#E7E2D8] hover:border-[#3457D5]/40'
+                }`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="w-8 h-8 rounded-full bg-[#3457D5] text-white flex items-center justify-center text-[10px] font-bold">
+                    {a.agent_id?.slice(-2) || '?'}
+                  </div>
+                  <span className="text-xl font-bold" style={{ color: rag.text }}>{a.percentage}%</span>
+                </div>
+                <div className="text-xs font-bold text-[#1D2433]">{a.agent_id}</div>
+                <div className="grid grid-cols-3 gap-1 mt-2 text-[9px]">
+                  <div>
+                    <div className="text-[#6B7385]">Audits</div>
+                    <div className="font-bold text-[#1D2433]">{a.total_audits}</div>
+                  </div>
+                  <div>
+                    <div className="text-[#6B7385]">FCR</div>
+                    <div className="font-bold text-[#1C9A6C]">{a.fcr_percentage}%</div>
+                  </div>
+                  <div>
+                    <div className="text-[#6B7385]">Fatal</div>
+                    <div className={`font-bold ${a.fatal_count > 0 ? 'text-[#D14343]' : 'text-[#1D2433]'}`}>{a.fatal_count}</div>
+                  </div>
+                </div>
+              </button>
+            )
+          })}
         </div>
       </Card>
+
+      {/* Agent Detail Panel (when selected) */}
+      {selectedAgent && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-[15px] font-semibold text-[#1D2433]">
+              Agent Details: {selectedAgent}
+            </h3>
+            <button onClick={() => setSelectedAgent(null)} className="text-xs text-[#6B7385] hover:text-[#1D2433]">Close</button>
+          </div>
+
+          {/* Parameter Scores */}
+          {agentParams && (
+            <div className="mb-6">
+              <h4 className="text-xs font-bold text-[#1D2433] uppercase mb-2">Score by Parameter</h4>
+              <div className="grid grid-cols-7 gap-2">
+                {agentParams.parameters?.map((p) => {
+                  const rag = ragOf(p.percentage)
+                  return (
+                    <div key={p.key} className="p-3 rounded-xl border text-center"
+                      style={{ background: rag.bg, borderColor: rag.text + '40' }}>
+                      <div className="text-[9px] font-semibold text-[#6B7385] min-h-[22px]">{p.label}</div>
+                      <div className="text-xl font-bold" style={{ color: rag.text }}>{p.percentage}%</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Drill-down */}
+          {agentDrill?.sub_parameters && (
+            <div className="mb-6">
+              <h4 className="text-xs font-bold text-[#1D2433] uppercase mb-2">Sub-Parameter Drill-Down</h4>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={agentDrill.sub_parameters} layout="vertical">
+                    <CartesianGrid vertical={false} stroke="#EFEAE0" />
+                    <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10 }} />
+                    <YAxis type="category" dataKey="sub" tick={{ fontSize: 10 }} width={110} />
+                    <Tooltip />
+                    <Bar dataKey="pct" radius={[0, 4, 4, 0]}>
+                      {agentDrill.sub_parameters.map((s, i) => (
+                        <rect key={i} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* Coaching */}
+          {agentCoach && (
+            <div className="mb-4 p-4 rounded-xl bg-[#FCF1DF] border border-[#C9862B]/20">
+              <div className="flex items-center gap-2 mb-2">
+                <Lightbulb size={14} className="text-[#C9862B]" />
+                <span className="text-xs font-bold text-[#1D2433] uppercase">AI Coaching Recommendations</span>
+                <span className="text-[10px] font-bold text-[#1C9A6C] ml-auto">
+                  {agentCoach.estimated_improvement}
+                </span>
+              </div>
+              <ul className="space-y-1">
+                {agentCoach.recommendations?.map((r, i) => (
+                  <li key={i} className="text-xs text-[#1D2433] flex gap-2">
+                    <span className="text-[#C9862B]">•</span> {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

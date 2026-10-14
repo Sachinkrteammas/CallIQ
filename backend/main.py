@@ -4,6 +4,10 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.database import engine
 from app.routers import kpis, conversation, calls, agents, incidents, alerts, settings as settings_router, client_overview, ai_prompts, auth, client_settings
+from app.routers import reports
+from app.routers import reports
+from app.routers import reports
+from app.routers import agents
 
 app_settings = get_settings()
 
@@ -11,7 +15,6 @@ app = FastAPI(title="CallIQ API", version="2.0.0")
 
 
 def _init_schema():
-    # Ensure users table has role and full_name columns needed for role-based access
     try:
         with engine.begin() as conn:
             roles = conn.execute(text(
@@ -49,6 +52,9 @@ app.include_router(auth.router)
 app.include_router(client_overview.router)
 app.include_router(client_overview.clients_router)
 app.include_router(client_settings.router)
+app.include_router(reports.router)
+app.include_router(reports.router)
+app.include_router(reports.router)
 
 
 @app.on_event("startup")

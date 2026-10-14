@@ -23,9 +23,38 @@ def _ensure_table(db: Session):
             audit_calls_per_agent INT DEFAULT 0,
             agents JSON,
             campaign_filter JSON,
-            ingroup_filter JSON
+            ingroup_filter JSON,
+            client_mrr FLOAT DEFAULT 0,
+            client_criticality VARCHAR(50) DEFAULT 'Medium',
+            client_call_volume INT DEFAULT 0,
+            agent_allocation INT DEFAULT 0,
+            criticality_revenue_impact INT DEFAULT 3,
+            criticality_customer_sensitivity INT DEFAULT 3,
+            criticality_escalation_risk INT DEFAULT 3,
+            criticality_sla_requirement INT DEFAULT 3,
+            criticality_process_complexity INT DEFAULT 3,
+            short_call_max INT DEFAULT 120,
+            medium_call_max INT DEFAULT 600
         )
     """))
+    # Safe migrations
+    for col, dtype in [
+        ("client_mrr", "FLOAT DEFAULT 0"),
+        ("client_criticality", "VARCHAR(50) DEFAULT 'Medium'"),
+        ("client_call_volume", "INT DEFAULT 0"),
+        ("agent_allocation", "INT DEFAULT 0"),
+        ("criticality_revenue_impact", "INT DEFAULT 3"),
+        ("criticality_customer_sensitivity", "INT DEFAULT 3"),
+        ("criticality_escalation_risk", "INT DEFAULT 3"),
+        ("criticality_sla_requirement", "INT DEFAULT 3"),
+        ("criticality_process_complexity", "INT DEFAULT 3"),
+        ("short_call_max", "INT DEFAULT 120"),
+        ("medium_call_max", "INT DEFAULT 600"),
+    ]:
+        try:
+            db.execute(text(f"ALTER TABLE client_settings ADD COLUMN {col} {dtype}"))
+        except Exception:
+            pass
     db.commit()
 
 
@@ -104,6 +133,32 @@ def _build_agent_details(client: Client, db2: Optional[Session], db3: Optional[S
     return agents_list
 
 
+def _auto_criticality(settings: Setting) -> str:
+    """Compute criticality from 5 sub-parameters (avg score)."""
+    scores = [
+        settings.criticality_revenue_impact or 3,
+        settings.criticality_customer_sensitivity or 3,
+        settings.criticality_escalation_risk or 3,
+        settings.criticality_sla_requirement or 3,
+        settings.criticality_process_complexity or 3,
+    ]
+    avg = sum(scores) / len(scores)
+    if avg >= 4.2:
+        return "High"
+    if avg >= 2.8:
+        return "Medium"
+    return "Low"
+
+
+def _calculate_total(settings: Setting, selected_agents: List[str]) -> int:
+    """Total = agent_allocation * per_agent (priority), else selected_agents * per_agent."""
+    per_agent = settings.audit_calls_per_agent or 0
+    alloc = settings.agent_allocation or 0
+    if alloc > 0:
+        return alloc * per_agent
+    return len(selected_agents) * per_agent
+
+
 def _settings_response(
     client_id: int,
     campaigns: List[str],
@@ -112,17 +167,30 @@ def _settings_response(
     agents_list: List[dict],
 ) -> dict:
     if settings:
+        selected_agents = settings.agents or [a["username"] for a in agents_list]
+        total = _calculate_total(settings, selected_agents)
         return {
             "client_id": client_id,
-            "total": settings.total or 0,
+            "total": total,
             "audit_calls_per_agent": settings.audit_calls_per_agent or 0,
-            "min_call_duration": settings.min_call_duration if settings.min_call_duration else 20,
-            "max_call_duration": settings.max_call_duration if settings.max_call_duration else 3600,
-            "agents": settings.agents or [a["username"] for a in agents_list],
+            "min_call_duration": settings.min_call_duration or 20,
+            "max_call_duration": settings.max_call_duration or 3600,
+            "agents": selected_agents,
             "campaign_filter": settings.campaign_filter if settings.campaign_filter is not None else campaigns,
             "ingroup_filter": settings.ingroup_filter if settings.ingroup_filter is not None else ingroups,
             "agent_details": agents_list,
             "is_default": False,
+            "client_mrr": settings.client_mrr or 0.0,
+            "client_criticality": settings.client_criticality or _auto_criticality(settings),
+            "client_call_volume": settings.client_call_volume or 0,
+            "agent_allocation": settings.agent_allocation or 0,
+            "criticality_revenue_impact": settings.criticality_revenue_impact or 3,
+            "criticality_customer_sensitivity": settings.criticality_customer_sensitivity or 3,
+            "criticality_escalation_risk": settings.criticality_escalation_risk or 3,
+            "criticality_sla_requirement": settings.criticality_sla_requirement or 3,
+            "criticality_process_complexity": settings.criticality_process_complexity or 3,
+            "short_call_max": settings.short_call_max or 120,
+            "medium_call_max": settings.medium_call_max or 600,
         }
 
     return {
@@ -136,6 +204,17 @@ def _settings_response(
         "ingroup_filter": ingroups,
         "agent_details": agents_list,
         "is_default": True,
+        "client_mrr": 0.0,
+        "client_criticality": 'Medium',
+        "client_call_volume": 0,
+        "agent_allocation": 0,
+        "criticality_revenue_impact": 3,
+        "criticality_customer_sensitivity": 3,
+        "criticality_escalation_risk": 3,
+        "criticality_sla_requirement": 3,
+        "criticality_process_complexity": 3,
+        "short_call_max": 120,
+        "medium_call_max": 600,
     }
 
 
@@ -161,11 +240,9 @@ def get_client_settings(
     _: dict = Depends(get_current_user),
 ):
     _ensure_table(db)
-
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-
     return _client_settings(db, client, db2, db3)
 
 
@@ -178,7 +255,6 @@ def upsert_client_settings(
     _: dict = Depends(get_current_user),
 ):
     _ensure_table(db)
-
     client = db.query(Client).filter(Client.id == payload.client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -187,10 +263,12 @@ def upsert_client_settings(
     if settings:
         for key, value in payload.model_dump().items():
             setattr(settings, key, value)
+        # Auto-compute criticality
+        settings.client_criticality = _auto_criticality(settings)
     else:
         settings = Setting(**payload.model_dump())
+        settings.client_criticality = _auto_criticality(settings)
         db.add(settings)
     db.commit()
     db.refresh(settings)
-
     return _client_settings(db, client, db2, db3)

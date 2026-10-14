@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, SeverityBadge, EmptyState } from '../components/shared.jsx'
 import { getClientCalls } from '../api/client.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
-import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Calendar, RefreshCw, Building2 } from 'lucide-react'
+import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Calendar, RefreshCw, Building2, Filter } from 'lucide-react'
 
 function getDateRange(days) {
   const to = new Date()
@@ -23,6 +23,12 @@ const rankingColor = {
   Critical: 'bg-[#D14343] text-white',
 }
 
+const saleCategoryColor = {
+  Genuine: 'bg-[#E7F7EF] text-[#1C9A6C]',
+  Invalid: 'bg-[#FBE9E9] text-[#D14343]',
+  Unknown: 'bg-[#F0EDE4] text-[#6B7385]',
+}
+
 export default function CallExplorer() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -37,6 +43,13 @@ export default function CallExplorer() {
   const [sortDir, setSortDir] = useState('desc')
   const [search, setSearch] = useState(searchParams.get('q') || '')
   const pageSize = 20
+  
+  // NEW FILTERS
+  const [saleCategory, setSaleCategory] = useState('')
+  const [invalidReason, setInvalidReason] = useState('')
+  const [crmSaleDone, setCrmSaleDone] = useState('')
+  const [customerConfirmation, setCustomerConfirmation] = useState('')
+  const [orderInformation, setOrderInformation] = useState('')
 
   const fetchCalls = useCallback(() => {
     if (!clientId) return
@@ -61,16 +74,22 @@ export default function CallExplorer() {
 
   useEffect(() => {
     setPage(1)
-  }, [clientId, fromDate, toDate])
+  }, [clientId, fromDate, toDate, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation])
 
   const filtered = calls.filter((c) => {
-    if (!search) return true
-    const q = search.toLowerCase()
-    return (
-      (c._call_id || '').toLowerCase().includes(q) ||
-      (c._agent_id || '').toLowerCase().includes(q) ||
-      JSON.stringify(c.sections || {}).toLowerCase().includes(q)
-    )
+    if (search) {
+      const q = search.toLowerCase()
+      const match = (c._call_id || '').toLowerCase().includes(q) ||
+        (c._agent_id || '').toLowerCase().includes(q) ||
+        JSON.stringify(c.sections || {}).toLowerCase().includes(q)
+      if (!match) return false
+    }
+    if (saleCategory && c.sale_category !== saleCategory) return false
+    if (invalidReason && c.invalid_reason !== invalidReason) return false
+    if (crmSaleDone && String(c.crm_sale_done) !== crmSaleDone) return false
+    if (customerConfirmation && c.customer_confirmation !== customerConfirmation) return false
+    if (orderInformation && c.order_information !== orderInformation) return false
+    return true
   })
 
   const sorted = [...filtered].sort((a, b) => {
@@ -127,14 +146,14 @@ export default function CallExplorer() {
 
       {/* Filter Bar */}
       <Card>
-        <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <Building2 size={14} className="text-[#6B7385]" />
             <label className="text-xs font-semibold text-[#6B7385]">Client</label>
             <select
               value={clientId ?? ''}
               onChange={(e) => setClientId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5] min-w-[160px]"
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5] min-w-[140px]"
             >
               <option value="all">All Clients</option>
               {clients.map((c) => (
@@ -161,6 +180,68 @@ export default function CallExplorer() {
               className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#3457D5]"
             />
           </div>
+          
+          {/* NEW FILTERS */}
+          <div className="flex items-center gap-1.5">
+            <Filter size={12} className="text-[#6B7385]" />
+            <select
+              value={saleCategory}
+              onChange={(e) => setSaleCategory(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+            >
+              <option value="">Sale Status</option>
+              <option value="Genuine">Genuine</option>
+              <option value="Invalid">Invalid</option>
+              <option value="Unknown">Unknown</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={invalidReason}
+              onChange={(e) => setInvalidReason(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+            >
+              <option value="">Invalid Reason</option>
+              <option value="Forcefully Placed">Forcefully Placed</option>
+              <option value="Not Confirmed">Not Confirmed</option>
+              <option value="Without Information">Without Information</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={crmSaleDone}
+              onChange={(e) => setCrmSaleDone(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+            >
+              <option value="">CRM Tag</option>
+              <option value="true">Sale Done</option>
+              <option value="false">Not Done</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={customerConfirmation}
+              onChange={(e) => setCustomerConfirmation(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+            >
+              <option value="">Customer Confirmation</option>
+              <option value="Confirmed">Confirmed</option>
+              <option value="Not Confirmed">Not Confirmed</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={orderInformation}
+              onChange={(e) => setOrderInformation(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+            >
+              <option value="">Order Info</option>
+              <option value="Complete">Complete</option>
+              <option value="Incomplete">Incomplete</option>
+              <option value="Not Available">Not Available</option>
+            </select>
+          </div>
+          
           <div className="flex items-center gap-1.5">
             {[7, 14, 30].map((d) => (
               <button
@@ -172,12 +253,12 @@ export default function CallExplorer() {
               </button>
             ))}
           </div>
-          <div className="relative flex-1 max-w-sm ml-auto">
+          <div className="relative flex-1 max-w-xs ml-auto">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6B7385]" />
             <input
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-              placeholder="Search by Call ID, Agent..."
+              placeholder="Search..."
               className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-[#F7F4EE] border border-[#E7E2D8] focus:outline-none focus:ring-2 focus:ring-[#3457D5]/30"
             />
           </div>
@@ -196,7 +277,7 @@ export default function CallExplorer() {
             <button onClick={fetchCalls} className="mt-2 text-xs font-semibold text-[#3457D5] hover:underline">Retry</button>
           </div>
         ) : sorted.length === 0 ? (
-          <EmptyState text="No calls match these filters. Try widening your date range or clearing filters." />
+          <EmptyState text="No calls match these filters." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -215,10 +296,14 @@ export default function CallExplorer() {
                     <span className="flex items-center gap-1">Percentage <ArrowUpDown size={10} /></span>
                   </th>
                   <th className="py-2 pr-3">Ranking</th>
-                  <th className="py-2 pr-3">Opening</th>
-                  <th className="py-2 pr-3">Communication</th>
                   <th className="py-2 pr-3">Fatal</th>
                   <th className="py-2 pr-3">Category</th>
+                  {/* NEW COLUMNS */}
+                  <th className="py-2 pr-3">Sale Status</th>
+                  <th className="py-2 pr-3">Invalid Reason</th>
+                  <th className="py-2 pr-3">CRM Tag</th>
+                  <th className="py-2 pr-3">Confirmation</th>
+                  <th className="py-2 pr-3">Order Info</th>
                 </tr>
               </thead>
               <tbody>
@@ -257,16 +342,6 @@ export default function CallExplorer() {
                       </span>
                     </td>
                     <td className="py-2.5 pr-3">
-                      <span className={`text-xs font-semibold ${openingScore(c) >= 80 ? 'text-[#1C9A6C]' : openingScore(c) >= 60 ? 'text-[#C9862B]' : 'text-[#D14343]'}`}>
-                        {openingScore(c)}%
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      <span className={`text-xs font-semibold ${communicationScore(c) >= 80 ? 'text-[#1C9A6C]' : communicationScore(c) >= 60 ? 'text-[#C9862B]' : 'text-[#D14343]'}`}>
-                        {communicationScore(c)}%
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-3">
                       {c.fatal_flag || c._is_transcript_fatal ? (
                         <span className="text-[10px] font-bold text-[#D14343] bg-[#FBE9E9] px-2 py-0.5 rounded-full">Fatal</span>
                       ) : (
@@ -274,6 +349,20 @@ export default function CallExplorer() {
                       )}
                     </td>
                     <td className="py-2.5 pr-3 text-[#6B7385] text-xs capitalize">{(c.call_category || '—').replace(/_/g, ' ')}</td>
+                    {/* NEW CELLS */}
+                    <td className="py-2.5 pr-3">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${saleCategoryColor[c.sale_category] || 'bg-gray-100 text-gray-600'}`}>
+                        {c.sale_category || 'Unknown'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.invalid_reason || '—'}</td>
+                    <td className="py-2.5 pr-3">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${c.crm_sale_done ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#F0EDE4] text-[#6B7385]'}`}>
+                        {c.crm_sale_done ? 'Done' : 'Not Done'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.customer_confirmation || '—'}</td>
+                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.order_information || '—'}</td>
                   </tr>
                 ))}
               </tbody>

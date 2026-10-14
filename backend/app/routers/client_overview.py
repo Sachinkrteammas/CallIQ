@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Optional
 from ..database import get_db
 from .auth import get_current_user
+from fastapi import BackgroundTasks
 
 router = APIRouter(prefix="/api/client", tags=["client-overview"])
 
@@ -1221,4 +1222,237 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
         "transcript": lines,
         "behaviours": behaviours,
         "coaching": _coaching_recommendation(risk),
+    }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# VAD Trigger — process recordings for a client on demand
+# ═══════════════════════════════════════════════════════════════════════════
+@router.post("/{client_id}/vad-process")
+def trigger_vad_processing(
+    client_id: str,
+    from_date: str = Query(default=None, description="YYYY-MM-DD"),
+    to_date: str = Query(default=None, description="YYYY-MM-DD"),
+    client_type: str = Query(default=None, description="Sales or Service"),
+    background_tasks: BackgroundTasks = None,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Kick off VAD processing for a client in the background.
+    Returns immediately with count of recordings pending processing."""
+    if not to_date:
+        to_date = datetime.now().strftime("%Y-%m-%d")
+    if not from_date:
+        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    client_id = _scope_client_id(user, client_id)
+    if not user.get("is_admin"):
+        client_type = None
+
+    where = [
+        "cl.recording_path IS NOT NULL",
+        "cl.recording_path != ''",
+        "DATE(cl.created_at) BETWEEN :from_date AND :to_date",
+        "cl.call_id NOT IN (SELECT call_id FROM call_vad_metrics)",
+    ]
+    params = {"from_date": from_date, "to_date": to_date}
+
+    if client_id != "all":
+        try:
+            params["client_id"] = int(client_id)
+            where.append("cl.client_id = :client_id")
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Invalid client_id")
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(
+            f"cl.client_id IN (SELECT id FROM clients "
+            f"WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)"
+        )
+
+    count_sql = text(f"SELECT COUNT(*) FROM call_logs cl WHERE {' AND '.join(where)}")
+    pending = db.execute(count_sql, params).scalar() or 0
+
+    if pending > 0:
+        background_tasks.add_task(
+            _run_vad_background,
+            client_id=None if client_id == "all" else int(client_id),
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+    return {
+        "status": "started" if pending > 0 else "nothing_to_do",
+        "message": f"VAD processing {'started' if pending > 0 else 'not needed'} for {pending} recordings",
+        "pending_count": pending,
+        "client_id": client_id,
+        "from_date": from_date,
+        "to_date": to_date,
+    }
+
+
+def _run_vad_background(client_id, from_date, to_date):
+    """Background worker — runs VAD on unprocessed recordings."""
+    import sys
+    from pathlib import Path
+
+    backend_root = Path(__file__).resolve().parent.parent.parent
+    if str(backend_root) not in sys.path:
+        sys.path.insert(0, str(backend_root))
+
+    try:
+        from scripts.process_vad import backfill as vad_backfill
+    except ImportError as e:
+        print(f"[VAD] Could not import scripts.process_vad: {e}")
+        return
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        print(f"[VAD] Starting backfill: client={client_id} from={from_date} to={to_date}")
+        vad_backfill(db, client_id=client_id, from_date=from_date, to_date=to_date)
+        print(f"[VAD] Backfill complete")
+    except Exception as e:
+        print(f"[VAD] Backfill failed: {e}")
+    finally:
+        db.close()
+
+
+        # ═══════════════════════════════════════════════════════════════════════════
+# ESM VAD — Aggregate metrics for a client (read from call_vad_metrics)
+# ═══════════════════════════════════════════════════════════════════════════
+
+VAD_BENCHMARKS = {
+    "dead_air": 15.0,
+    "long_hold": 28.0,
+    "interruptions": 18.0,
+    "talk_ratio": 5.0,
+    "silence": 20.0,
+    "cross_talk": 12.0,
+    "escalation": 8.0,
+    "script_deviation": 8.0,
+}
+
+
+@router.get("/{client_id}/vad-metrics")
+def client_vad_metrics(
+    client_id: str,
+    from_date: str = Query(default=None, description="YYYY-MM-DD"),
+    to_date: str = Query(default=None, description="YYYY-MM-DD"),
+    client_type: str = Query(default=None, description="Sales or Service"),
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Aggregate ESM VAD metrics for a client (or all clients) over a date range."""
+    if not to_date:
+        to_date = datetime.now().strftime("%Y-%m-%d")
+    if not from_date:
+        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    client_id = _scope_client_id(user, client_id)
+    if not user.get("is_admin"):
+        client_type = None
+
+    filters = ["call_date BETWEEN :from_date AND :to_date"]
+    params = {"from_date": from_date, "to_date": to_date}
+
+    if client_id != "all":
+        try:
+            params["client_id"] = int(client_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid client_id")
+        filters.append("client_id = :client_id")
+    else:
+        if client_type and client_type.lower() in ("sales", "service"):
+            op = "=" if client_type.lower() == "sales" else "!="
+            filters.append(
+                f"client_id IN (SELECT id FROM clients "
+                f"WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)"
+            )
+
+    where = " AND ".join(filters)
+
+    sql = text(f"""
+        SELECT
+            COALESCE(AVG(dead_air_pct), 0)          AS dead_air,
+            COALESCE(AVG(long_hold_sec), 0)         AS long_hold,
+            COALESCE(AVG(interruptions), 0)         AS interruptions,
+            COALESCE(AVG(talk_ratio_pct), 0)        AS talk_ratio,
+            COALESCE(AVG(silence_pct), 0)           AS silence,
+            COALESCE(AVG(cross_talk_pct), 0)        AS cross_talk,
+            COALESCE(AVG(escalation_pct), 0)        AS escalation,
+            COALESCE(AVG(script_deviation_pct), 0)  AS script_deviation,
+            COUNT(*)                                AS total_calls
+        FROM call_vad_metrics
+        WHERE {where}
+    """)
+    row = db.execute(sql, params).mappings().one()
+
+    total_calls = int(row["total_calls"] or 0)
+
+    if total_calls == 0:
+        return {
+            "client_id": client_id,
+            "from_date": from_date,
+            "to_date": to_date,
+            "total_calls_analyzed": 0,
+            "metrics": [],
+        }
+
+    # Previous-period comparison for trend
+    from_dt = datetime.strptime(from_date, "%Y-%m-%d").date()
+    to_dt = datetime.strptime(to_date, "%Y-%m-%d").date()
+    period_days = max(1, (to_dt - from_dt).days + 1)
+    prev_to = from_dt - timedelta(days=1)
+    prev_from = prev_to - timedelta(days=period_days - 1)
+
+    prev_filters = ["call_date BETWEEN :prev_from AND :prev_to"]
+    prev_params = {"prev_from": prev_from.isoformat(), "prev_to": prev_to.isoformat()}
+
+    if client_id != "all":
+        prev_filters.append("client_id = :client_id")
+        prev_params["client_id"] = params["client_id"]
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        prev_filters.append(
+            f"client_id IN (SELECT id FROM clients "
+            f"WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)"
+        )
+
+    prev_where = " AND ".join(prev_filters)
+    prev_row = db.execute(text(f"""
+        SELECT
+            COALESCE(AVG(dead_air_pct), 0)          AS dead_air,
+            COALESCE(AVG(long_hold_sec), 0)         AS long_hold,
+            COALESCE(AVG(interruptions), 0)         AS interruptions,
+            COALESCE(AVG(talk_ratio_pct), 0)        AS talk_ratio,
+            COALESCE(AVG(silence_pct), 0)           AS silence,
+            COALESCE(AVG(cross_talk_pct), 0)        AS cross_talk,
+            COALESCE(AVG(escalation_pct), 0)        AS escalation,
+            COALESCE(AVG(script_deviation_pct), 0)  AS script_deviation
+        FROM call_vad_metrics
+        WHERE {prev_where}
+    """), prev_params).mappings().one()
+
+    def trend(key):
+        cur = float(row[key] or 0)
+        prev = float(prev_row[key] or 0)
+        return round(cur - prev, 2) if prev else 0.0
+
+    metrics = [
+        {"key": "dead_air",         "value": round(float(row["dead_air"]), 2),         "benchmark": VAD_BENCHMARKS["dead_air"],         "trend": trend("dead_air")},
+        {"key": "long_hold",        "value": round(float(row["long_hold"]), 2),        "benchmark": VAD_BENCHMARKS["long_hold"],        "trend": trend("long_hold")},
+        {"key": "interruptions",    "value": round(float(row["interruptions"]), 2),    "benchmark": VAD_BENCHMARKS["interruptions"],    "trend": trend("interruptions")},
+        {"key": "talk_ratio",       "value": round(float(row["talk_ratio"]), 2),       "benchmark": VAD_BENCHMARKS["talk_ratio"],       "trend": trend("talk_ratio")},
+        {"key": "silence",          "value": round(float(row["silence"]), 2),          "benchmark": VAD_BENCHMARKS["silence"],          "trend": trend("silence")},
+        {"key": "cross_talk",       "value": round(float(row["cross_talk"]), 2),       "benchmark": VAD_BENCHMARKS["cross_talk"],       "trend": trend("cross_talk")},
+        {"key": "escalation",       "value": round(float(row["escalation"]), 2),       "benchmark": VAD_BENCHMARKS["escalation"],       "trend": trend("escalation")},
+        {"key": "script_deviation", "value": round(float(row["script_deviation"]), 2), "benchmark": VAD_BENCHMARKS["script_deviation"], "trend": trend("script_deviation")},
+    ]
+
+    return {
+        "client_id": client_id,
+        "from_date": from_date,
+        "to_date": to_date,
+        "total_calls_analyzed": total_calls,
+        "metrics": metrics,
     }

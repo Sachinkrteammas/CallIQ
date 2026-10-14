@@ -16,3 +16,10 @@ class CallLog(Base):
     transcript = Column(Text)
     voice_mail = Column(Boolean, default=False)
     created_at = Column(DateTime)
+    
+    # NEW FIELDS FOR SALES CATEGORIZATION
+    sale_category = Column(String(50), default='Unknown')  # Genuine, Invalid, Unknown
+    invalid_reason = Column(String(255), nullable=True)  # Forcefully Placed, Not Confirmed, Without Information
+    crm_sale_done = Column(Boolean, default=False)
+    customer_confirmation = Column(String(50), default='Not Confirmed')  # Confirmed / Not Confirmed
+    order_information = Column(String(50), default='Not Available')  # Complete / Incomplete / Not Available

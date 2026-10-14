@@ -18,3 +18,10 @@ class CallAudit(Base):
     ranking = Column(String(32))
     fatal_flag = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # ═══ SALES CATEGORIZATION ═══
+    sale_category = Column(String(50), default="Unknown", index=True)
+    invalid_reason = Column(String(255), nullable=True, index=True)
+    crm_sale_done = Column(Boolean, default=False)
+    customer_confirmation = Column(String(50), default="Not Confirmed")
+    order_information = Column(String(50), default="Not Available")

@@ -1,9 +1,44 @@
-import random
 from typing import Optional
-from fastapi import APIRouter, Query, HTTPException
-from .. import data
+from fastapi import APIRouter, Query, HTTPException, Depends
+from sqlalchemy import text, or_
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from .. import data  # Keep mock as fallback for dev
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
+
+
+def _db_row_to_call(row) -> dict:
+    """Convert DB row (call_logs + call_audits join) to API response dict."""
+    audit_json = row.get("audit_json") or {}
+    if isinstance(audit_json, str):
+        import json
+        try:
+            audit_json = json.loads(audit_json)
+        except Exception:
+            audit_json = {}
+    
+    return {
+        "_call_id": row.get("call_id"),
+        "_id": row.get("call_id"),
+        "_agent_id": row.get("agent_id"),
+        "_agent_name": row.get("agent_id"),  # Can join agent_master if needed
+        "_duration": row.get("duration") or 0,
+        "_created_at": str(row.get("created_at") or ""),
+        "total_score": row.get("total_score") or 0,
+        "percentage": row.get("percentage") or 0,
+        "ranking": row.get("ranking") or "—",
+        "fatal_flag": row.get("fatal_flag") or False,
+        "call_category": audit_json.get("call_category") or "—",
+        "sections": audit_json.get("sections") or {},
+        # NEW: Sales Categorization (from call_audits table)
+        "sale_category": row.get("sale_category") or "Unknown",
+        "invalid_reason": row.get("invalid_reason"),
+        "crm_sale_done": row.get("crm_sale_done") or False,
+        "customer_confirmation": row.get("customer_confirmation") or "Not Confirmed",
+        "order_information": row.get("order_information") or "Not Available",
+    }
 
 
 @router.get("")
@@ -18,107 +53,176 @@ def list_calls(
     escalated_only: bool = False,
     dead_air_only: bool = False,
     tag: Optional[str] = None,
+    sale_category: Optional[str] = None,
+    invalid_reason: Optional[str] = None,
+    crm_sale_done: Optional[bool] = None,
+    customer_confirmation: Optional[str] = None,
+    order_information: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
     page: int = 1,
     page_size: int = 15,
+    db: Session = Depends(get_db),
 ):
+    # Build SQL with filters
+    where = ["1=1"]
+    params = {}
+    
+    if q:
+        where.append("(cl.call_id LIKE :q OR cl.agent_id LIKE :q)")
+        params["q"] = f"%{q}%"
+    if agent_id:
+        where.append("cl.agent_id = :agent_id")
+        params["agent_id"] = agent_id
+    if from_date:
+        where.append("cl.created_at >= :from_date")
+        params["from_date"] = from_date
+    if to_date:
+        where.append("cl.created_at <= :to_date")
+        params["to_date"] = to_date + " 23:59:59"
+    if sale_category:
+        where.append("ca.sale_category = :sale_category")
+        params["sale_category"] = sale_category
+    if invalid_reason:
+        where.append("ca.invalid_reason = :invalid_reason")
+        params["invalid_reason"] = invalid_reason
+    if crm_sale_done is not None:
+        where.append("ca.crm_sale_done = :crm_sale_done")
+        params["crm_sale_done"] = crm_sale_done
+    if customer_confirmation:
+        where.append("ca.customer_confirmation = :customer_confirmation")
+        params["customer_confirmation"] = customer_confirmation
+    if order_information:
+        where.append("ca.order_information = :order_information")
+        params["order_information"] = order_information
+
+    where_clause = " AND ".join(where)
+    
+    # Count total
+    count_sql = text(f"""
+        SELECT COUNT(*) AS cnt
+        FROM call_logs cl
+        LEFT JOIN call_audits ca ON ca.call_id = cl.call_id
+        WHERE {where_clause}
+    """)
+    total = db.execute(count_sql, params).scalar() or 0
+
+    # Fetch page
+    offset = (page - 1) * page_size
+    params["limit"] = page_size
+    params["offset"] = offset
+    
+    data_sql = text(f"""
+        SELECT cl.call_id, cl.agent_id, cl.duration, cl.created_at,
+               ca.total_score, ca.percentage, ca.ranking, ca.fatal_flag, ca.audit_json,
+               ca.sale_category, ca.invalid_reason, ca.crm_sale_done,
+               ca.customer_confirmation, ca.order_information
+        FROM call_logs cl
+        LEFT JOIN call_audits ca ON ca.call_id = cl.call_id
+        WHERE {where_clause}
+        ORDER BY cl.created_at DESC
+        LIMIT :limit OFFSET :offset
+    """)
+    rows = db.execute(data_sql, params).mappings().all()
+    
+    # If DB empty, fallback to mock for dev
+    if total == 0 and not any([q, sale_category, invalid_reason, crm_sale_done]):
+        print("[calls] DB empty — falling back to mock data.CALLS")
+        return _mock_list_calls(
+            q, team, project, queue, agent_id, severity, critical_only,
+            escalated_only, dead_air_only, tag, sale_category, invalid_reason,
+            crm_sale_done, customer_confirmation, order_information,
+            page, page_size
+        )
+    
+    items = [_db_row_to_call(dict(r)) for r in rows]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+def _mock_list_calls(q, team, project, queue, agent_id, severity, critical_only,
+                     escalated_only, dead_air_only, tag, sale_category, invalid_reason,
+                     crm_sale_done, customer_confirmation, order_information,
+                     page, page_size):
+    """Fallback: old mock behavior."""
     results = data.CALLS
     if q:
         ql = q.lower()
-        results = [c for c in results if ql in c["id"].lower() or ql in c["agent_name"].lower()
-                   or ql in c["customer"].lower() or ql in c["phone"].lower()]
-    if team:
-        results = [c for c in results if c["team"] == team]
-    if project:
-        results = [c for c in results if c["project"] == project]
-    if queue:
-        results = [c for c in results if c["queue"] == queue]
+        results = [c for c in results if ql in c["id"].lower() or ql in c["agent_name"].lower()]
     if agent_id:
         results = [c for c in results if c["agent_id"] == agent_id]
-    if severity:
-        results = [c for c in results if c["risk"] == severity]
-    if critical_only:
-        results = [c for c in results if c["critical"]]
-    if escalated_only:
-        results = [c for c in results if c["escalated"]]
-    if dead_air_only:
-        results = [c for c in results if c["dead_air_pct"] > 10]
-    if tag == "abusive":
-        results = [c for c in results if c["abusive"]]
-    if tag == "interruptions":
-        results = [c for c in results if c["interruptions"] >= 4]
-
     total = len(results)
     start = (page - 1) * page_size
     page_items = results[start:start + page_size]
-    return {"items": page_items, "total": total, "page": page, "page_size": page_size}
-
-
-def _build_detail(call):
-    random.seed(hash(call["id"]) % (2**31))
-    timeline = []
-    for t, label, level in data.TIMELINE_TEMPLATE:
-        timeline.append({"time": t, "label": label, "level": level})
-
-    transcript = []
-    t_sec = 0
-    for speaker, line in data.TRANSCRIPT_LINES:
-        t_sec += random.randint(20, 55)
-        mm, ss = divmod(t_sec, 60)
-        transcript.append({
-            "speaker": speaker,
-            "time": f"{mm}:{ss:02d}",
-            "text": line.format(agent=call["agent_name"].split()[0]),
-            "emotion": random.choice(["neutral", "positive", "negative", "frustrated"]),
-        })
-
-    scores = {
-        "overall": call["conversation_score"],
-        "professionalism": round(random.uniform(50, 98), 1),
-        "empathy": round(random.uniform(40, 95), 1),
-        "listening": round(random.uniform(45, 97), 1),
-        "confidence": round(random.uniform(50, 96), 1),
-        "compliance": call["compliance_score"],
-        "patience": round(random.uniform(40, 95), 1),
-        "resolution": round(random.uniform(45, 98), 1),
-        "control": round(random.uniform(40, 96), 1),
-    }
-
-    behaviours = []
-    pool = [
-        ("Dead Air Detected", "amber"), ("Long Hold", "amber"), ("Multiple Interruptions", "amber"),
-        ("Agent Overtalking", "amber"), ("Customer Frustrated", "red"), ("Script Deviation", "amber"),
-        ("Missing Disclaimer", "red"), ("Abusive Language", "red"), ("Threat Detected", "red"),
-    ]
-    sample_n = 6 if call["critical"] else 3
-    for label, level in random.sample(pool, k=sample_n):
-        behaviours.append({
-            "label": label,
-            "confidence": round(random.uniform(72, 99), 1),
-            "timestamp": f"{random.randint(0,9)}:{random.randint(10,59)}",
-            "severity": "Critical" if level == "red" else "Medium",
-        })
-
-    emotion_journey = []
-    mood = 0.5
-    for i in range(10):
-        mood += random.uniform(-0.25, 0.2)
-        mood = max(0, min(1, mood))
-        emotion_journey.append({"t": i, "customer": round(mood, 2),
-                                 "agent": round(min(1, max(0, mood + random.uniform(-0.1, 0.2))), 2)})
-
-    return {
-        **call,
-        "timeline": timeline,
-        "transcript": transcript,
-        "scores": scores,
-        "behaviours": behaviours,
-        "emotion_journey": emotion_journey,
-    }
+    # Normalize for frontend
+    normalized = [{
+        "_call_id": c["id"], "_id": c["id"],
+        "_agent_id": c["agent_id"], "_agent_name": c["agent_name"],
+        "_duration": c.get("duration_sec") or 0,
+        "_created_at": c.get("date", ""),
+        "total_score": c.get("score") or 0,
+        "percentage": c.get("score") or 0,
+        "ranking": "—", "fatal_flag": c.get("critical", False),
+        "call_category": "—", "sections": {},
+        "sale_category": c.get("sale_category", "Unknown"),
+        "invalid_reason": c.get("invalid_reason"),
+        "crm_sale_done": c.get("crm_sale_done", False),
+        "customer_confirmation": c.get("customer_confirmation", "Not Confirmed"),
+        "order_information": c.get("order_information", "Not Available"),
+    } for c in page_items]
+    return {"items": normalized, "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/{call_id}")
-def get_call(call_id: str):
-    call = next((c for c in data.CALLS if c["id"] == call_id), None)
-    if not call:
-        raise HTTPException(status_code=404, detail="Call not found")
-    return _build_detail(call)
+def get_call(call_id: str, db: Session = Depends(get_db)):
+    row = db.execute(
+        text("""
+            SELECT cl.call_id, cl.agent_id, cl.duration, cl.created_at, cl.transcript,
+                   ca.total_score, ca.percentage, ca.ranking, ca.fatal_flag, ca.audit_json,
+                   ca.sale_category, ca.invalid_reason, ca.crm_sale_done,
+                   ca.customer_confirmation, ca.order_information
+            FROM call_logs cl
+            LEFT JOIN call_audits ca ON ca.call_id = cl.call_id
+            WHERE cl.call_id = :cid
+        """),
+        {"cid": call_id},
+    ).mappings().one_or_none()
+    
+    if not row:
+        # Fallback to mock
+        call = next((c for c in data.CALLS if c["id"] == call_id), None)
+        if not call:
+            raise HTTPException(status_code=404, detail="Call not found")
+        return _build_mock_detail(call)
+    
+    audit_json = row.get("audit_json") or {}
+    if isinstance(audit_json, str):
+        import json
+        try:
+            audit_json = json.loads(audit_json)
+        except Exception:
+            audit_json = {}
+    
+    return {
+        **_db_row_to_call(dict(row)),
+        "transcript": row.get("transcript") or "",
+        "timeline": audit_json.get("timeline", []),
+        "scores": audit_json.get("scores", {}),
+        "behaviours": audit_json.get("behaviours_detected", []),
+        "emotion_journey": audit_json.get("emotion_journey", []),
+        "summary": audit_json.get("summary", ""),
+        "recommendations": audit_json.get("recommendations", []),
+        "areas_for_improvement": audit_json.get("areas_for_improvement", []),
+    }
+
+
+def _build_mock_detail(call):
+    import random
+    random.seed(hash(call["id"]) % (2**31))
+    return {
+        **call,
+        "timeline": [{"time": t, "label": l, "level": lv} for t, l, lv in data.TIMELINE_TEMPLATE],
+        "transcript": [],
+        "scores": {"overall": call.get("conversation_score", 0)},
+        "behaviours": [],
+        "emotion_journey": [],
+    }

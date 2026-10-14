@@ -4,9 +4,7 @@ const api = axios.create({ baseURL: '/api' })
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
@@ -26,7 +24,13 @@ export const login = (username, password) => api.post('/auth/login', { username,
 export const getMe = () => api.get('/auth/me').then(r => r.data)
 export const registerUser = (payload) => api.post('/auth/register', payload).then(r => r.data)
 
-export const getOverview = () => api.get('/kpis/overview').then(r => r.data)
+export const getOverview = (params = {}) => api.get('/kpis/overview', { params }).then(r => r.data)
+export const getScoreByParameter = (params = {}) => api.get('/kpis/score-by-parameter', { params }).then(r => r.data)
+export const getAgentLeaderboard = (params = {}) => api.get('/kpis/agent-leaderboard', { params }).then(r => r.data)
+export const getTrends = (params = {}) => api.get('/kpis/trends', { params }).then(r => r.data)
+export const getSalesCategorization = (params = {}) => api.get('/kpis/sales-categorization', { params }).then(r => r.data)
+export const getCallDurationCategories = (params = {}) => api.get('/kpis/call-duration-categories', { params }).then(r => r.data)
+export const getMonthlyAuditSummary = (params = {}) => api.get('/kpis/monthly-audit-summary', { params }).then(r => r.data)
 export const getHealthScore = () => api.get('/kpis/health-score').then(r => r.data)
 export const getInsights = () => api.get('/kpis/insights').then(r => r.data)
 export const getTrend = () => api.get('/kpis/trend').then(r => r.data)
@@ -38,9 +42,17 @@ export const getFindings = () => api.get('/conversation/findings').then(r => r.d
 export const listCalls = (params = {}) => api.get('/calls', { params }).then(r => r.data)
 export const getCall = (id) => api.get(`/calls/${id}`).then(r => r.data)
 export const getCallDetail = (callId) => api.get(`/client/call/${callId}`).then(r => r.data)
+export const getCallRecordingUrl = (callId) => `/api/calls/${callId}/recording`
 
-export const listAgents = () => api.get('/agents').then(r => r.data)
+// ═══ AGENTS ═══
+export const listAgents = (params = {}) => api.get('/agents', { params }).then(r => r.data)
 export const getAgent = (id) => api.get(`/agents/${id}`).then(r => r.data)
+export const getAgentList = (params = {}) => api.get('/agents/list', { params }).then(r => r.data)
+export const getAgentScoreByParameter = (agentId, params = {}) => api.get(`/agents/${agentId}/score-by-parameter`, { params }).then(r => r.data)
+export const getAgentComparison = (params = {}) => api.get('/agents/comparison', { params }).then(r => r.data)
+export const getAgentSubParameterDrilldown = (agentId, params = {}) => api.get(`/agents/${agentId}/sub-parameter-drilldown`, { params }).then(r => r.data)
+export const getAgentCoaching = (agentId, params = {}) => api.get(`/agents/${agentId}/coaching`, { params }).then(r => r.data)
+export const getAllCoaching = (params = {}) => api.get('/agents/coaching/all', { params }).then(r => r.data)
 export const getTeamHealth = () => api.get('/agents/team-health').then(r => r.data)
 export const getCoachingQueue = () => api.get('/agents/coaching').then(r => r.data)
 export const createCoaching = (payload) => api.post('/agents/coaching', payload).then(r => r.data)
@@ -93,7 +105,6 @@ export const activateAiPrompt = (id) => api.post(`/settings/ai-prompts/${id}/act
 export const deleteAiPrompt = (id) => api.delete(`/settings/ai-prompts/${id}`).then(r => r.data)
 
 export const listClients = () => api.get('/clients').then(r => r.data)
-
 export const listAllClients = () => api.get('/clients/list').then(r => r.data)
 export const getClientDetail = (id) => api.get(`/clients/detail/${id}`).then(r => r.data)
 export const createClient = (payload) => api.post('/clients', payload).then(r => r.data)
@@ -116,6 +127,17 @@ export const getClientAgents = (clientId, fromDate, toDate, clientType) =>
 export const getClientTeamHealth = (clientId, fromDate, toDate, clientType) =>
   api.get(`/client/${clientId}/team-health`, { params: { from_date: fromDate, to_date: toDate, client_type: clientType } }).then(r => r.data)
 
+export const getClientVADMetrics = (clientId, fromDate, toDate, clientType) =>
+  api.get(`/client/${clientId}/vad-metrics`, { params: { from_date: fromDate, to_date: toDate, client_type: clientType } }).then(r => r.data)
+
+export const triggerVADProcessing = (clientId, fromDate, toDate, clientType) =>
+  api.post(`/client/${clientId}/vad-process`, null, { params: { from_date: fromDate, to_date: toDate, client_type: clientType } }).then(r => r.data)
+
+export const getCallVADMetrics = (callId) => api.get(`/client/call/${callId}/vad`).then(r => r.data)
+
+export const getClientVADTrend = (clientId, fromDate, toDate, clientType) =>
+  api.get(`/client/${clientId}/vad-trend`, { params: { from_date: fromDate, to_date: toDate, client_type: clientType } }).then(r => r.data)
+
 export const getClientSettings = async (clientId) => {
   try {
     const res = await api.get(`/client-settings/${clientId}`)
@@ -126,7 +148,6 @@ export const getClientSettings = async (clientId) => {
   }
 }
 
-export const saveClientSettings = (payload) =>
-  api.post('/client-settings', payload).then(r => r.data)
+export const saveClientSettings = (payload) => api.post('/client-settings', payload).then(r => r.data)
 
 export default api

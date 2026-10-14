@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Card, SectionTitle } from '../components/shared.jsx'
-import { FileText, Download, Loader2, Clock, CheckCircle, Mail, Calendar } from 'lucide-react'
+import { FileText, Download, Loader2, Clock, CheckCircle, Mail, Calendar, Filter } from 'lucide-react'
+import { useClientFilter } from '../components/ClientContext.jsx'
 
 const TYPES = [
   { name: 'Executive Summary', icon: FileText, desc: 'High-level overview of all metrics and key findings' },
@@ -11,14 +12,22 @@ const TYPES = [
   { name: 'Coaching Effectiveness', icon: FileText, desc: 'Training outcomes and improvement metrics' },
   { name: 'Queue Performance', icon: FileText, desc: 'Queue-wise score breakdown and volume analysis' },
   { name: 'Client Scorecard', icon: FileText, desc: 'Per-client quality metrics and SLA compliance' },
+  { name: 'Sales Categorization', icon: FileText, desc: 'Genuine vs Invalid sales with reasons' },
 ]
 const FORMATS = ['PDF', 'Excel', 'CSV', 'Email']
 
 export default function Reports() {
+  const { clients, clientId, setClientId, fromDate, toDate, setFromDate, setToDate } = useClientFilter()
   const [type, setType] = useState(TYPES[0].name)
   const [format, setFormat] = useState('PDF')
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
+  
+  // NEW FILTERS
+  const [advisorId, setAdvisorId] = useState('')
+  const [category, setCategory] = useState('')
+  const [saleCategory, setSaleCategory] = useState('')
+  const [invalidReason, setInvalidReason] = useState('')
 
   const generate = () => {
     setLoading(true); setDone(false)
@@ -32,6 +41,97 @@ export default function Reports() {
       <div className="grid grid-cols-3 gap-6">
         <Card className="col-span-2">
           <SectionTitle>Generate Report</SectionTitle>
+          
+          {/* NEW FILTERS SECTION */}
+          <div className="mb-4 p-3 rounded-xl border border-[#E7E2D8] bg-[#F7F4EE]/50">
+            <div className="flex items-center gap-2 mb-2">
+              <Filter size={14} className="text-[#6B7385]" />
+              <span className="text-xs font-semibold text-[#6B7385] uppercase">Report Filters</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Client</label>
+                <select
+                  value={clientId ?? ''}
+                  onChange={(e) => setClientId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                  className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+                >
+                  <option value="all">All Clients</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Advisor ID</label>
+                <input
+                  type="text"
+                  value={advisorId}
+                  onChange={(e) => setAdvisorId(e.target.value)}
+                  placeholder="e.g. AGT-101"
+                  className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#3457D5]"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-semibold text-[#6B7385] uppercase">From Date</label>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#3457D5]"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-semibold text-[#6B7385] uppercase">To Date</label>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#3457D5]"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Category</label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+                >
+                  <option value="">All Categories</option>
+                  <option value="Inbound">Inbound</option>
+                  <option value="Outbound">Outbound</option>
+                  <option value="Sales">Sales</option>
+                  <option value="Service">Service</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Sale Status</label>
+                <select
+                  value={saleCategory}
+                  onChange={(e) => setSaleCategory(e.target.value)}
+                  className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+                >
+                  <option value="">All</option>
+                  <option value="Genuine">Genuine</option>
+                  <option value="Invalid">Invalid</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Invalid Reason</label>
+                <select
+                  value={invalidReason}
+                  onChange={(e) => setInvalidReason(e.target.value)}
+                  className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+                >
+                  <option value="">All</option>
+                  <option value="Forcefully Placed">Forcefully Placed</option>
+                  <option value="Not Confirmed">Not Confirmed</option>
+                  <option value="Without Information">Without Information</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           <div className="mb-4">
             <div className="text-xs font-semibold text-[#6B7385] mb-2 uppercase">Report Type</div>
             <div className="grid grid-cols-2 gap-2">
