@@ -8,6 +8,9 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+export const getAgentFullInfo = (agentId) => api.get(`/agents/${agentId}/full-info`).then(r => r.data)
+export const getQualityBands = (params = {}) => api.get('/kpis/quality-bands', { params }).then(r => r.data)
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {

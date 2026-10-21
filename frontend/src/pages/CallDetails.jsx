@@ -13,6 +13,13 @@ function toSec(str) {
   return p.length === 2 ? p[0] * 60 + p[1] : (Number.isNaN(p[0]) ? 0 : p[0])
 }
 
+function getInitials(str) {
+  const parts = String(str || '').trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
 export default function CallDetails() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -314,10 +321,14 @@ export default function CallDetails() {
             <Card>
               <SectionTitle>Agent Details</SectionTitle>
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-full bg-[#3457D5]/15 flex items-center justify-center text-sm font-bold text-[#3457D5]">{agent.id}</div>
-                <div>
-                  <div className="text-sm font-semibold text-[#1D2433]">{agent.name}</div>
-                  <div className="text-[10px] text-[#6B7385]">{agent.team} · {agent.calls} calls</div>
+                <div className="w-10 h-10 shrink-0 rounded-full bg-[#3457D5]/15 flex items-center justify-center text-xs font-bold text-[#3457D5]">
+                  {getInitials(agent.name || agent.id)}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-[#1D2433] truncate">{agent.name}</div>
+                  <div className="text-[10px] text-[#6B7385] truncate">
+                    <span className="font-mono text-[#3457D5]">{agent.id}</span> · {agent.team} · {agent.calls} calls
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">

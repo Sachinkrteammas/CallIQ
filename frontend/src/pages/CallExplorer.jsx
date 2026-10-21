@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, SeverityBadge, EmptyState } from '../components/shared.jsx'
-import { getClientCalls } from '../api/client.js'
+import { listCalls } from '../api/client.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
-import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Calendar, RefreshCw, Building2, Filter } from 'lucide-react'
+import {
+  Search, ChevronLeft, ChevronRight, ArrowUpDown, Calendar,
+  RefreshCw, Building2, Filter, X
+} from 'lucide-react'
 
 function getDateRange(days) {
   const to = new Date()
@@ -29,10 +32,18 @@ const saleCategoryColor = {
   Unknown: 'bg-[#F0EDE4] text-[#6B7385]',
 }
 
+const bandColor = {
+  TQ: 'bg-[#E7F7EF] text-[#1C9A6C]',
+  MQ: 'bg-[#FCF1DF] text-[#C9862B]',
+  BQ: 'bg-[#FBE9E9] text-[#D14343]',
+}
+
+
 export default function CallExplorer() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const { clientId, clients, setClientId, selectedClient, isAllClients, fromDate, toDate, setFromDate, setToDate, clientType } = useClientFilter()
+
   const [calls, setCalls] = useState([])
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
@@ -43,56 +54,67 @@ export default function CallExplorer() {
   const [sortDir, setSortDir] = useState('desc')
   const [search, setSearch] = useState(searchParams.get('q') || '')
   const pageSize = 20
-  
-  // NEW FILTERS
+
+  // Filters
+  const [bandFilter, setBandFilter] = useState(searchParams.get('band') || '')
+  const [agentFilter, setAgentFilter] = useState(searchParams.get('agent_id') || '')
   const [saleCategory, setSaleCategory] = useState('')
   const [invalidReason, setInvalidReason] = useState('')
   const [crmSaleDone, setCrmSaleDone] = useState('')
   const [customerConfirmation, setCustomerConfirmation] = useState('')
   const [orderInformation, setOrderInformation] = useState('')
 
+  // ═══ Sync URL params when they change ═══
+  useEffect(() => {
+    const bandFromUrl = searchParams.get('band')
+    const agentFromUrl = searchParams.get('agent_id')
+    if (bandFromUrl !== null && bandFromUrl !== bandFilter) setBandFilter(bandFromUrl || '')
+    if (agentFromUrl !== null && agentFromUrl !== agentFilter) setAgentFilter(agentFromUrl || '')
+  }, [searchParams])
+
   const fetchCalls = useCallback(() => {
-    if (!clientId) return
     setLoading(true)
     setError(null)
-    getClientCalls(clientId, fromDate, toDate, page, pageSize, clientType)
+
+    const params = {
+      from_date: fromDate,
+      to_date: toDate,
+      page,
+      page_size: pageSize,
+    }
+    if (clientId && clientId !== 'all') params.client_id = clientId
+    if (clientType) params.client_type = clientType
+    if (bandFilter) params.band = bandFilter
+    if (agentFilter) params.agent_id = agentFilter
+    if (saleCategory) params.sale_category = saleCategory
+    if (invalidReason) params.invalid_reason = invalidReason
+    if (crmSaleDone) params.crm_sale_done = crmSaleDone === 'true'
+    if (customerConfirmation) params.customer_confirmation = customerConfirmation
+    if (orderInformation) params.order_information = orderInformation
+    if (search) params.q = search
+
+    listCalls(params)
       .then((res) => {
-        setCalls(res.calls || [])
+        setCalls(res.items || res.calls || [])
         setTotal(res.total || 0)
-        setTotalPages(res.pages || 0)
+        setTotalPages(res.pages || Math.ceil((res.total || 0) / pageSize))
         setLoading(false)
       })
       .catch((err) => {
         setError(err.message || 'Failed to load calls')
         setLoading(false)
       })
-  }, [clientId, fromDate, toDate, page, clientType])
+  }, [clientId, clientType, fromDate, toDate, page, bandFilter, agentFilter, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation, search])
 
-  useEffect(() => {
-    fetchCalls()
-  }, [fetchCalls])
+  useEffect(() => { fetchCalls() }, [fetchCalls])
+  useEffect(() => { setPage(1) }, [clientId, fromDate, toDate, bandFilter, agentFilter, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation])
 
-  useEffect(() => {
-    setPage(1)
-  }, [clientId, fromDate, toDate, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation])
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('desc') }
+  }
 
-  const filtered = calls.filter((c) => {
-    if (search) {
-      const q = search.toLowerCase()
-      const match = (c._call_id || '').toLowerCase().includes(q) ||
-        (c._agent_id || '').toLowerCase().includes(q) ||
-        JSON.stringify(c.sections || {}).toLowerCase().includes(q)
-      if (!match) return false
-    }
-    if (saleCategory && c.sale_category !== saleCategory) return false
-    if (invalidReason && c.invalid_reason !== invalidReason) return false
-    if (crmSaleDone && String(c.crm_sale_done) !== crmSaleDone) return false
-    if (customerConfirmation && c.customer_confirmation !== customerConfirmation) return false
-    if (orderInformation && c.order_information !== orderInformation) return false
-    return true
-  })
-
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = [...calls].sort((a, b) => {
     const dir = sortDir === 'asc' ? 1 : -1
     if (sortKey === 'score') return ((a.total_score || 0) - (b.total_score || 0)) * dir
     if (sortKey === 'percentage') return ((a.percentage || 0) - (b.percentage || 0)) * dir
@@ -101,25 +123,25 @@ export default function CallExplorer() {
     return 0
   })
 
-  const toggleSort = (key) => {
-    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(key); setSortDir('desc') }
-  }
-
   const handlePreset = (days) => {
     const range = getDateRange(days)
     setFromDate(range.from)
     setToDate(range.to)
   }
 
-  const openingScore = (c) => {
-    const s = c.sections?.opening
-    return s ? Math.round((s.score / s.max_score) * 100) : 0
+  const clearBandFilter = () => {
+    setBandFilter('')
+    // Also remove from URL
+    const p = new URLSearchParams(searchParams)
+    p.delete('band')
+    navigate(`/calls?${p.toString()}`, { replace: true })
   }
 
-  const communicationScore = (c) => {
-    const s = c.sections?.communication
-    return s ? Math.round((s.score / s.max_score) * 100) : 0
+  const clearAgentFilter = () => {
+    setAgentFilter('')
+    const p = new URLSearchParams(searchParams)
+    p.delete('agent_id')
+    navigate(`/calls?${p.toString()}`, { replace: true })
   }
 
   const formatDuration = (sec) => {
@@ -134,15 +156,46 @@ export default function CallExplorer() {
       : `${m}:${String(s).padStart(2, '0')}`
   }
 
+  const getBand = (pct) => {
+    if (pct >= 80) return 'TQ'
+    if (pct >= 60) return 'MQ'
+    return 'BQ'
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#1D2433]">Call Explorer</h1>
-          <p className="text-xs text-[#6B7385] mt-0.5">{isAllClients ? 'All Clients' : selectedClient ? selectedClient.name : 'No client selected'} · {fromDate} to {toDate}</p>
+          <p className="text-xs text-[#6B7385] mt-0.5">
+            {isAllClients ? 'All Clients' : selectedClient ? selectedClient.name : 'No client selected'} · {fromDate} to {toDate}
+          </p>
         </div>
         <span className="text-xs text-[#6B7385] font-medium">{total} calls found</span>
       </div>
+
+      {/* Active filters */}
+      {(bandFilter || agentFilter) && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-[#6B7385] font-semibold">Active filters:</span>
+          {bandFilter && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold"
+              style={{
+                background: bandFilter === 'TQ' ? '#E7F7EF' : bandFilter === 'MQ' ? '#FCF1DF' : '#FBE9E9',
+                color: bandFilter === 'TQ' ? '#1C9A6C' : bandFilter === 'MQ' ? '#C9862B' : '#D14343',
+              }}>
+              Band: {bandFilter}
+              <button onClick={clearBandFilter} className="hover:opacity-70"><X size={10} /></button>
+            </span>
+          )}
+          {agentFilter && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-[#EEF1FE] text-[#3457D5]">
+              Agent: {agentFilter}
+              <button onClick={clearAgentFilter} className="hover:opacity-70"><X size={10} /></button>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Filter Bar */}
       <Card>
@@ -180,10 +233,24 @@ export default function CallExplorer() {
               className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 focus:outline-none focus:border-[#3457D5]"
             />
           </div>
-          
-          {/* NEW FILTERS */}
+
+          {/* Band filter */}
           <div className="flex items-center gap-1.5">
             <Filter size={12} className="text-[#6B7385]" />
+            <select
+              value={bandFilter}
+              onChange={(e) => setBandFilter(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
+            >
+              <option value="">All Bands</option>
+              <option value="TQ">TQ (≥80%)</option>
+              <option value="MQ">MQ (60-79%)</option>
+              <option value="BQ">BQ (&lt;60%)</option>
+            </select>
+          </div>
+
+          {/* Sale Category filter */}
+          <div className="flex items-center gap-1.5">
             <select
               value={saleCategory}
               onChange={(e) => setSaleCategory(e.target.value)}
@@ -192,7 +259,6 @@ export default function CallExplorer() {
               <option value="">Sale Status</option>
               <option value="Genuine">Genuine</option>
               <option value="Invalid">Invalid</option>
-              <option value="Unknown">Unknown</option>
             </select>
           </div>
           <div className="flex items-center gap-1.5">
@@ -224,7 +290,7 @@ export default function CallExplorer() {
               onChange={(e) => setCustomerConfirmation(e.target.value)}
               className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
             >
-              <option value="">Customer Confirmation</option>
+              <option value="">Confirmation</option>
               <option value="Confirmed">Confirmed</option>
               <option value="Not Confirmed">Not Confirmed</option>
             </select>
@@ -241,7 +307,7 @@ export default function CallExplorer() {
               <option value="Not Available">Not Available</option>
             </select>
           </div>
-          
+
           <div className="flex items-center gap-1.5">
             {[7, 14, 30].map((d) => (
               <button
@@ -289,16 +355,12 @@ export default function CallExplorer() {
                   <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('duration')}>
                     <span className="flex items-center gap-1">Duration <ArrowUpDown size={10} /></span>
                   </th>
-                  <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('score')}>
-                    <span className="flex items-center gap-1">Score <ArrowUpDown size={10} /></span>
-                  </th>
                   <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('percentage')}>
-                    <span className="flex items-center gap-1">Percentage <ArrowUpDown size={10} /></span>
+                    <span className="flex items-center gap-1">Score % <ArrowUpDown size={10} /></span>
                   </th>
+                  <th className="py-2 pr-3">Band</th>
                   <th className="py-2 pr-3">Ranking</th>
                   <th className="py-2 pr-3">Fatal</th>
-                  <th className="py-2 pr-3">Category</th>
-                  {/* NEW COLUMNS */}
                   <th className="py-2 pr-3">Sale Status</th>
                   <th className="py-2 pr-3">Invalid Reason</th>
                   <th className="py-2 pr-3">CRM Tag</th>
@@ -307,73 +369,78 @@ export default function CallExplorer() {
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((c, i) => (
-                  <tr
-                    key={c._call_id || c._id || i}
-                    onClick={() => navigate(`/calls/${c._call_id || c._id}`)}
-                    className="border-b border-[#E7E2D8]/70 hover:bg-[#F7F4EE] cursor-pointer transition"
-                  >
-                    <td className="py-2.5 pr-3 font-semibold text-[#3457D5]">{c._call_id || '—'}</td>
-                    <td className="py-2.5 pr-3 font-medium text-[#1D2433]">{c._agent_name || c._agent_id || '—'}</td>
-                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{(c._created_at || '').slice(0, 10)}</td>
-                    <td className="py-2.5 pr-3 text-xs font-medium text-[#1D2433]">{formatDuration(c._duration)}</td>
-                    <td className="py-2.5 pr-3">
-                      <span className={`font-semibold ${(c.total_score || 0) >= 80 ? 'text-[#1C9A6C]' : (c.total_score || 0) >= 60 ? 'text-[#C9862B]' : 'text-[#D14343]'}`}>
-                        {c.total_score || 0}
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-12 h-1.5 rounded-full bg-[#F0EDE4] overflow-hidden">
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${c.percentage || 0}%`,
-                              background: (c.percentage || 0) >= 80 ? '#1C9A6C' : (c.percentage || 0) >= 60 ? '#C9862B' : '#D14343',
-                            }}
-                          />
+                {sorted.map((c, i) => {
+                  const band = getBand(c.percentage || 0)
+                  return (
+                    <tr
+                      key={c._call_id || c._id || i}
+                      onClick={() => navigate(`/calls/${c._call_id || c._id}`)}
+                      className="border-b border-[#E7E2D8]/70 hover:bg-[#F7F4EE] cursor-pointer transition"
+                    >
+                      <td className="py-2.5 pr-3 font-semibold text-[#3457D5] whitespace-nowrap">
+                        {(c._call_id || '').slice(0, 20)}
+                      </td>
+                      <td className="py-2.5 pr-3 font-medium text-[#1D2433]">{c._agent_name || c._agent_id || '—'}</td>
+                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs whitespace-nowrap">{(c._created_at || '').slice(0, 10)}</td>
+                      <td className="py-2.5 pr-3 text-xs font-medium text-[#1D2433]">{formatDuration(c._duration)}</td>
+                      <td className="py-2.5 pr-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-12 h-1.5 rounded-full bg-[#F0EDE4] overflow-hidden">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${c.percentage || 0}%`,
+                                background: (c.percentage || 0) >= 80 ? '#1C9A6C' : (c.percentage || 0) >= 60 ? '#C9862B' : '#D14343',
+                              }}
+                            />
+                          </div>
+                          <span className="text-xs font-semibold">{c.percentage || 0}%</span>
                         </div>
-                        <span className="text-xs font-medium">{c.percentage || 0}%</span>
-                      </div>
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${rankingColor[c.ranking] || 'bg-gray-100 text-gray-600'}`}>
-                        {c.ranking || '—'}
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      {c.fatal_flag || c._is_transcript_fatal ? (
-                        <span className="text-[10px] font-bold text-[#D14343] bg-[#FBE9E9] px-2 py-0.5 rounded-full">Fatal</span>
-                      ) : (
-                        <span className="text-[10px] font-medium text-[#6B7385]">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs capitalize">{(c.call_category || '—').replace(/_/g, ' ')}</td>
-                    {/* NEW CELLS */}
-                    <td className="py-2.5 pr-3">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${saleCategoryColor[c.sale_category] || 'bg-gray-100 text-gray-600'}`}>
-                        {c.sale_category || 'Unknown'}
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.invalid_reason || '—'}</td>
-                    <td className="py-2.5 pr-3">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${c.crm_sale_done ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#F0EDE4] text-[#6B7385]'}`}>
-                        {c.crm_sale_done ? 'Done' : 'Not Done'}
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.customer_confirmation || '—'}</td>
-                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.order_information || '—'}</td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${bandColor[band]}`}>
+                          {band}
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${rankingColor[c.ranking] || 'bg-gray-100 text-gray-600'}`}>
+                          {c.ranking || '—'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        {c.fatal_flag ? (
+                          <span className="text-[10px] font-bold text-[#D14343] bg-[#FBE9E9] px-2 py-0.5 rounded-full">Fatal</span>
+                        ) : (
+                          <span className="text-[10px] font-medium text-[#6B7385]">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${saleCategoryColor[c.sale_category] || 'bg-gray-100 text-gray-600'}`}>
+                          {c.sale_category || 'Unknown'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.invalid_reason || '—'}</td>
+                      <td className="py-2.5 pr-3">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${c.crm_sale_done ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#F0EDE4] text-[#6B7385]'}`}>
+                          {c.crm_sale_done ? 'Done' : 'Not Done'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.customer_confirmation || '—'}</td>
+                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.order_information || '—'}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
             <div className="flex items-center justify-between mt-4 text-xs text-[#6B7385]">
               <span>Page {page} of {totalPages}</span>
               <div className="flex gap-2">
-                <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="px-3 py-1.5 rounded-lg border border-[#E7E2D8] disabled:opacity-40 font-semibold hover:bg-[#F7F4EE] transition flex items-center gap-1">
+                <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}
+                  className="px-3 py-1.5 rounded-lg border border-[#E7E2D8] disabled:opacity-40 font-semibold hover:bg-[#F7F4EE] transition flex items-center gap-1">
                   <ChevronLeft size={13} /> Previous
                 </button>
-                <button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="px-3 py-1.5 rounded-lg border border-[#E7E2D8] disabled:opacity-40 font-semibold hover:bg-[#F7F4EE] transition flex items-center gap-1">
+                <button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}
+                  className="px-3 py-1.5 rounded-lg border border-[#E7E2D8] disabled:opacity-40 font-semibold hover:bg-[#F7F4EE] transition flex items-center gap-1">
                   Next <ChevronRight size={13} />
                 </button>
               </div>

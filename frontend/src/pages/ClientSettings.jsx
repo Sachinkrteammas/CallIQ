@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Card } from '../components/shared.jsx'
 import { useClientFilter } from '../components/ClientContext.jsx'
 import { getClientSettings, saveClientSettings } from '../api/client.js'
-import { Download, Users, Building2, FileText } from 'lucide-react'
+import { Download, Users, Building2, FileText, AlertTriangle } from 'lucide-react'
 
 function getDefaultForm(clientId) {
   return {
@@ -16,7 +16,9 @@ function getDefaultForm(clientId) {
 
     audit_mode: 'monthly',
     monthly_target: 30,
+    monthly_max: 60,          // ← NEW
     daily_target: 1,
+    daily_max: 3,             // ← NEW
     audit_calls_per_agent: 0,
 
     short_call_count: 5,
@@ -115,7 +117,9 @@ export default function ClientSettings() {
 
           audit_mode: data.audit_mode ?? 'monthly',
           monthly_target: data.monthly_target ?? 30,
+          monthly_max: data.monthly_max ?? 60,
           daily_target: data.daily_target ?? 1,
+          daily_max: data.daily_max ?? 3,
 
           short_call_count: data.short_call_count ?? 5,
           medium_call_count: data.medium_call_count ?? 15,
@@ -167,7 +171,20 @@ export default function ClientSettings() {
     setForm((prev) => ({ ...prev, agents: all }))
   }, [agentDetails])
 
+  // ═══ MAX target validation ═══
+  const targetValue = form.audit_mode === 'monthly'
+    ? Number(form.monthly_target) || 0
+    : Number(form.daily_target) || 0
+  const maxValue = form.audit_mode === 'monthly'
+    ? Number(form.monthly_max) || 0
+    : Number(form.daily_max) || 0
+  const maxExceeded = maxValue > 0 && targetValue > maxValue
+
   const handleSave = async () => {
+    if (maxExceeded) {
+      setNotice({ type: 'error', text: `Target (${targetValue}) exceeds Maximum (${maxValue})` })
+      return
+    }
     setSaving(true)
     setNotice(null)
     try {
@@ -184,9 +201,6 @@ export default function ClientSettings() {
     setSaving(false)
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // DOWNLOAD HANDLERS
-  // ═══════════════════════════════════════════════════════════
   const buildDateParams = () => {
     const p = new URLSearchParams()
     if (fromDate) p.set('from_date', fromDate)
@@ -243,18 +257,14 @@ export default function ClientSettings() {
 
   return (
     <div className="space-y-6 max-w-5xl">
-      {/* ═══════════════════════════════════════════════
-          DOWNLOAD REPORTS SECTION (NEW)
-         ═══════════════════════════════════════════════ */}
+      {/* Download Reports */}
       <Card>
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="text-[15px] font-semibold text-[#1D2433] flex items-center gap-2">
               <Download size={16} className="text-[#3457D5]" /> Download Reports
             </h2>
-            <p className="text-[11px] text-[#6B7385] mt-0.5">
-              Export as CSV for the selected date range
-            </p>
+            <p className="text-[11px] text-[#6B7385] mt-0.5">Export as CSV for the selected date range</p>
           </div>
           <div className="flex items-center gap-2">
             <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)}
@@ -266,46 +276,37 @@ export default function ClientSettings() {
         </div>
 
         <div className="grid grid-cols-3 gap-3">
-          {/* Client-wise */}
           <button onClick={handleDownloadClientWise}
             className="text-left p-4 rounded-xl border border-[#E7E2D8] hover:border-[#3457D5]/40 hover:shadow-md transition-all group">
             <div className="w-9 h-9 rounded-lg bg-[#EEF1FE] flex items-center justify-center mb-2">
               <Building2 size={16} className="text-[#3457D5]" />
             </div>
             <div className="text-sm font-bold text-[#1D2433]">Client-wise Report</div>
-            <div className="text-[10px] text-[#6B7385] mt-1">
-              Sabhi clients ka summary — total audits, score, genuine, invalid
-            </div>
+            <div className="text-[10px] text-[#6B7385] mt-1">Sabhi clients ka summary</div>
             <div className="flex items-center gap-1 mt-2 text-[10px] font-semibold text-[#3457D5] opacity-0 group-hover:opacity-100 transition">
               <Download size={10} /> Download CSV
             </div>
           </button>
 
-          {/* Agent-wise (is client ke) */}
           <button onClick={handleDownloadAgentWise}
             className="text-left p-4 rounded-xl border border-[#E7E2D8] hover:border-[#3457D5]/40 hover:shadow-md transition-all group">
             <div className="w-9 h-9 rounded-lg bg-[#E7F7EF] flex items-center justify-center mb-2">
               <Users size={16} className="text-[#1C9A6C]" />
             </div>
             <div className="text-sm font-bold text-[#1D2433]">Agent-wise Report</div>
-            <div className="text-[10px] text-[#6B7385] mt-1">
-              Selected client ke saare agents ka breakdown
-            </div>
+            <div className="text-[10px] text-[#6B7385] mt-1">Selected client ke agents</div>
             <div className="flex items-center gap-1 mt-2 text-[10px] font-semibold text-[#1C9A6C] opacity-0 group-hover:opacity-100 transition">
               <Download size={10} /> Download CSV
             </div>
           </button>
 
-          {/* Detailed Audits */}
           <button onClick={handleDownloadDetailedAudits}
             className="text-left p-4 rounded-xl border border-[#E7E2D8] hover:border-[#3457D5]/40 hover:shadow-md transition-all group">
             <div className="w-9 h-9 rounded-lg bg-[#FCF1DF] flex items-center justify-center mb-2">
               <FileText size={16} className="text-[#C9862B]" />
             </div>
             <div className="text-sm font-bold text-[#1D2433]">Detailed Audit Records</div>
-            <div className="text-[10px] text-[#6B7385] mt-1">
-              Har call ka poora record — sale category, reason, score
-            </div>
+            <div className="text-[10px] text-[#6B7385] mt-1">Har call ka poora record</div>
             <div className="flex items-center gap-1 mt-2 text-[10px] font-semibold text-[#C9862B] opacity-0 group-hover:opacity-100 transition">
               <Download size={10} /> Download CSV
             </div>
@@ -313,9 +314,7 @@ export default function ClientSettings() {
         </div>
       </Card>
 
-      {/* ═══════════════════════════════════════════════
-          CLIENT SETTINGS
-         ═══════════════════════════════════════════════ */}
+      {/* Client Settings */}
       <Card>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -357,7 +356,7 @@ export default function ClientSettings() {
               </div>
             )}
 
-            {/* SECTION 1: Audit Frequency */}
+            {/* SECTION 1: Audit Frequency with MIN + MAX */}
             <div className="mb-6 p-4 rounded-xl bg-[#F7F4EE] border border-[#E7E2D8]">
               <h3 className="text-xs font-bold text-[#1D2433] uppercase mb-3">1. Audit Frequency</h3>
               <div className="flex gap-2 mb-4">
@@ -373,23 +372,53 @@ export default function ClientSettings() {
                   </button>
                 ))}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 {form.audit_mode === 'monthly' ? (
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Monthly Audit Target</label>
-                    <input type="number" disabled={settingsLoading}
-                      className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
-                      value={form.monthly_target}
-                      onChange={(e) => setForm((p) => ({ ...p, monthly_target: Number(e.target.value) || 0 }))} />
-                  </div>
+                  <>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
+                        Monthly Min Target
+                      </label>
+                      <input type="number" disabled={settingsLoading}
+                        className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
+                        value={form.monthly_target}
+                        onChange={(e) => setForm((p) => ({ ...p, monthly_target: Number(e.target.value) || 0 }))} />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
+                        Monthly Max Target
+                      </label>
+                      <input type="number" disabled={settingsLoading}
+                        className={`rounded-xl border bg-white px-3 py-2 text-sm ${
+                          maxExceeded ? 'border-[#D14343]' : 'border-[#E7E2D8]'
+                        }`}
+                        value={form.monthly_max}
+                        onChange={(e) => setForm((p) => ({ ...p, monthly_max: Number(e.target.value) || 0 }))} />
+                    </div>
+                  </>
                 ) : (
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Daily Audit Target</label>
-                    <input type="number" disabled={settingsLoading}
-                      className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
-                      value={form.daily_target}
-                      onChange={(e) => setForm((p) => ({ ...p, daily_target: Number(e.target.value) || 0 }))} />
-                  </div>
+                  <>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
+                        Daily Min Target
+                      </label>
+                      <input type="number" disabled={settingsLoading}
+                        className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
+                        value={form.daily_target}
+                        onChange={(e) => setForm((p) => ({ ...p, daily_target: Number(e.target.value) || 0 }))} />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
+                        Daily Max Target
+                      </label>
+                      <input type="number" disabled={settingsLoading}
+                        className={`rounded-xl border bg-white px-3 py-2 text-sm ${
+                          maxExceeded ? 'border-[#D14343]' : 'border-[#E7E2D8]'
+                        }`}
+                        value={form.daily_max}
+                        onChange={(e) => setForm((p) => ({ ...p, daily_max: Number(e.target.value) || 0 }))} />
+                    </div>
+                  </>
                 )}
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Total Calls (auto)</label>
@@ -397,6 +426,16 @@ export default function ClientSettings() {
                     className="rounded-xl border border-[#E7E2D8] bg-[#F0EDE4] px-3 py-2 text-sm font-bold text-[#3457D5]" />
                 </div>
               </div>
+              {maxExceeded && (
+                <div className="mt-2 text-[10px] font-semibold text-[#D14343] bg-[#FBE9E9] px-2 py-1 rounded">
+                  ⚠️ Target ({targetValue}) exceeds Maximum ({maxValue})
+                </div>
+              )}
+              {maxValue > 0 && targetValue <= maxValue && (
+                <div className="mt-2 text-[10px] text-[#6B7385]">
+                  Range: {targetValue} - {maxValue} audits {form.audit_mode === 'monthly' ? 'per month' : 'per day'}
+                </div>
+              )}
             </div>
 
             {/* SECTION 2: Duration Distribution */}
@@ -535,7 +574,7 @@ export default function ClientSettings() {
             </div>
 
             <div className="flex justify-end mt-5">
-              <button onClick={handleSave} disabled={saving || settingsLoading || !selectedClient}
+              <button onClick={handleSave} disabled={saving || settingsLoading || !selectedClient || maxExceeded}
                 className="rounded-xl bg-[#3457D5] px-6 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-[#2a45b0] disabled:opacity-50">
                 {saving ? 'Saving...' : 'Save Settings'}
               </button>

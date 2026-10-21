@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
 
-from .. import data
 from ..database import get_db
 from .auth import get_current_user
 
@@ -31,10 +30,11 @@ class FatalRuleCreate(BaseModel):
 
 
 def _ensure_tables(db: Session):
+    """Create tables + seed ONLY essential fatal rules (no fake incidents)."""
     db.execute(text("""
         CREATE TABLE IF NOT EXISTS incidents (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            call_id VARCHAR(50),
+            call_id VARCHAR(255),
             agent_name VARCHAR(255),
             customer VARCHAR(255),
             project VARCHAR(255),
@@ -60,47 +60,55 @@ def _ensure_tables(db: Session):
     db.execute(text("""
         CREATE TABLE IF NOT EXISTS incident_agents (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(255) NOT NULL
+            name VARCHAR(255) NOT NULL UNIQUE
         )
     """))
     db.commit()
-    # Seed once if empty
-    count = db.execute(text("SELECT COUNT(*) FROM incidents")).scalar()
-    if count == 0:
-        for inc in data.INCIDENTS:
-            db.execute(text(
-                "INSERT INTO incidents (call_id, agent_name, customer, project, queue, incident_type, severity, status, assigned_to) "
-                "VALUES (:call_id, :agent_name, :customer, :project, :queue, :incident_type, :severity, :status, :assigned_to)"
-            ), {
-                "call_id": inc["call_id"],
-                "agent_name": inc.get("agent_name"),
-                "customer": inc.get("customer"),
-                "project": inc.get("project"),
-                "queue": inc.get("queue"),
-                "incident_type": inc["incident_type"],
-                "severity": inc["severity"],
-                "status": inc["status"],
-                "assigned_to": inc.get("assigned_to"),
-            })
-        db.commit()
+
+    # ═══════════════════════════════════════════════════════
+    # Seed ONLY 5 essential fatal rules (client feedback)
+    # NO fake incidents, NO fake agents
+    # ═══════════════════════════════════════════════════════
     rcount = db.execute(text("SELECT COUNT(*) FROM fatal_rules")).scalar()
     if rcount == 0:
-        for r in data.FATAL_RULES:
+        essential_rules = [
+            ("Abusive Language", "Critical", "Immediate"),
+            ("Compliance Violation", "Critical", "Immediate"),
+            ("Customer Threat", "Critical", "Immediate"),
+            ("Data Privacy Breach", "Critical", "Immediate"),
+            ("Policy Violation", "High", "1 Hour"),
+        ]
+        for name, sev, esc in essential_rules:
             db.execute(text(
                 "INSERT INTO fatal_rules (name, enabled, severity, escalation_level) "
-                "VALUES (:name, :enabled, :severity, :escalation_level)"
-            ), {
-                "name": r["name"],
-                "enabled": r["enabled"],
-                "severity": r["severity"],
-                "escalation_level": r["escalation_level"],
-            })
+                "VALUES (:name, TRUE, :sev, :esc)"
+            ), {"name": name, "sev": sev, "esc": esc})
         db.commit()
-    acount = db.execute(text("SELECT COUNT(*) FROM incident_agents")).scalar()
-    if acount == 0:
-        for a in data.AGENTS:
-            db.execute(text("INSERT INTO incident_agents (name) VALUES (:name)"), {"name": a["name"] if isinstance(a, dict) else a})
-        db.commit()
+        print(f"[incidents] Seeded {len(essential_rules)} essential fatal rules")
+
+    # Populate incident_agents from agent_master if available
+    try:
+        acount = db.execute(text("SELECT COUNT(*) FROM incident_agents")).scalar()
+        if acount == 0:
+            # Try to fetch from agent_master (if it exists in this DB)
+            try:
+                agents = db.execute(text(
+                    "SELECT displayname FROM agent_master WHERE status = 'A' LIMIT 500"
+                )).scalars().all()
+                for a in agents:
+                    if a:
+                        try:
+                            db.execute(text(
+                                "INSERT IGNORE INTO incident_agents (name) VALUES (:n)"
+                            ), {"n": a})
+                        except Exception:
+                            pass
+                db.commit()
+            except Exception:
+                # agent_master not in this DB — skip
+                pass
+    except Exception:
+        pass
 
 
 def _incident_row(row):
@@ -223,6 +231,9 @@ def delete_incident(incident_id: int, db: Session = Depends(get_db), user=Depend
     return {"deleted": incident_id}
 
 
+# ═══════════════════════════════════════════════════════════
+# FATAL RULES
+# ═══════════════════════════════════════════════════════════
 @router.get("/fatal-rules/all")
 def get_fatal_rules(db: Session = Depends(get_db), user=Depends(get_current_user)):
     _ensure_tables(db)

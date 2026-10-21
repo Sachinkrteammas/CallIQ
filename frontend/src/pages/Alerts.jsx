@@ -1,156 +1,226 @@
-import React, { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Card, SeverityBadge, EmptyState } from '../components/shared.jsx'
-import { listAlerts, listAlertCategories, updateAlert, getSampleEmail } from '../api/client.js'
-import { Mail, X, AlertTriangle, ShieldAlert, Siren, VolumeX, Clock, FileWarning, TrendingDown, Lock } from 'lucide-react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { Card, SectionTitle, SeverityBadge, EmptyState } from '../components/shared.jsx'
+import { Bell, Mail, CheckCircle, Clock, AlertTriangle, RefreshCw, Filter } from 'lucide-react'
+import { listAlerts, updateAlert, getSampleEmail } from '../api/client.js'
 
-const catIcons = { AlertTriangle, ShieldAlert, Siren, VolumeX, Clock, FileWarning, TrendingDown, Lock }
+// Only 5 allowed categories
+const ALLOWED_CATEGORIES = [
+  'Abusive Language',
+  'Compliance Violation',
+  'Customer Threat',
+  'Data Privacy Breach',
+  'Policy Violation',
+]
+
+const STATUSES = ['All', 'Open', 'Acknowledged', 'Resolved']
+
+const CATEGORY_ICONS = {
+  'Abusive Language': AlertTriangle,
+  'Compliance Violation': AlertTriangle,
+  'Customer Threat': AlertTriangle,
+  'Data Privacy Breach': AlertTriangle,
+  'Policy Violation': AlertTriangle,
+}
+
+const CATEGORY_COLORS = {
+  'Abusive Language': '#D14343',
+  'Compliance Violation': '#C9862B',
+  'Customer Threat': '#D14343',
+  'Data Privacy Breach': '#7C3AED',
+  'Policy Violation': '#3457D5',
+}
+
 
 export default function Alerts() {
   const [alerts, setAlerts] = useState([])
-  const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
-  const [emailPreview, setEmailPreview] = useState(null)
-  const [activeCategory, setActiveCategory] = useState(null)
-  const navigate = useNavigate()
+  const [error, setError] = useState(null)
+  const [statusFilter, setStatusFilter] = useState('All')
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [selectedEmail, setSelectedEmail] = useState(null)
 
-  useEffect(() => {
-    Promise.all([listAlerts(), listAlertCategories()])
-      .then(([alertData, catData]) => {
-        setAlerts(alertData)
-        setCategories(catData)
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+  const loadAlerts = useCallback(async () => {
+    setLoading(true); setError(null)
+    try {
+      const data = await listAlerts()
+      setAlerts(data || [])
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Failed to load alerts')
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
-  const resolve = (id) => {
-    updateAlert(id, { status: 'Resolved' }).then((updated) => {
-      setAlerts(prev => prev.map(a => a.id === id ? updated : a))
-    })
+  useEffect(() => { loadAlerts() }, [loadAlerts])
+
+  const filtered = alerts.filter((a) => {
+    if (!ALLOWED_CATEGORIES.includes(a.category)) return false
+    if (statusFilter !== 'All' && a.status !== statusFilter) return false
+    if (categoryFilter && a.category !== categoryFilter) return false
+    return true
+  })
+
+  const handleAcknowledge = async (id) => {
+    try {
+      await updateAlert(id, { status: 'Acknowledged' })
+      loadAlerts()
+    } catch { /* ignore */ }
   }
 
-  const assign = (id) => {
-    updateAlert(id, { status: 'Acknowledged', assigned_to: 'Rohan Mehta' }).then((updated) => {
-      setAlerts(prev => prev.map(a => a.id === id ? updated : a))
-    })
+  const handleResolve = async (id) => {
+    try {
+      await updateAlert(id, { status: 'Resolved' })
+      loadAlerts()
+    } catch { /* ignore */ }
   }
 
-  const handleEmailPreview = (alert) => {
-    getSampleEmail(alert.id).then((emailData) => {
-      setEmailPreview({ ...alert, emailData })
-    })
-  }
-
-  const filtered = activeCategory
-    ? alerts.filter(a => a.incident.toLowerCase().includes(activeCategory.toLowerCase()))
-    : alerts
-
-  if (loading) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-xl font-bold text-[#1D2433]">Alerts</h1>
-        <div className="text-sm text-[#6B7385]">Loading alerts...</div>
-      </div>
-    )
+  const handleViewEmail = async (id) => {
+    try {
+      const email = await getSampleEmail(id)
+      setSelectedEmail(email)
+    } catch { /* ignore */ }
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold text-[#1D2433]">Alerts</h1>
-
-      {/* Alert Category Cards */}
-      <div className="grid grid-cols-4 gap-4">
-        {categories.map((cat) => {
-          const Icon = catIcons[cat.icon] || AlertTriangle
-          return (
-            <button
-              key={cat.label}
-              onClick={() => setActiveCategory(activeCategory === cat.label ? null : cat.label)}
-              className={`text-left p-4 rounded-xl border transition-all ${activeCategory === cat.label ? 'border-[#3457D5] bg-[#EEF1FE] shadow-md' : 'border-[#E7E2D8] hover:border-[#3457D5]/40 hover:shadow'}`}
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: cat.color + '15' }}>
-                  <Icon size={16} style={{ color: cat.color }} />
-                </div>
-              </div>
-              <div className="text-2xl font-bold text-[#1D2433]">{cat.count}</div>
-              <div className="text-xs text-[#6B7385] font-medium mt-0.5">{cat.label}</div>
-            </button>
-          )
-        })}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-[#1D2433]">Alerts</h1>
+          <p className="text-xs text-[#6B7385] mt-0.5">
+            5 critical categories · {filtered.length} alerts
+          </p>
+        </div>
+        <button onClick={loadAlerts} disabled={loading}
+          className="flex items-center gap-1.5 text-xs font-semibold text-[#3457D5] hover:underline disabled:opacity-50">
+          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
+        </button>
       </div>
 
-      {/* Live Alert Feed */}
+      {/* Filters */}
       <Card>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-[15px] font-semibold text-[#1D2433]">Live Alert Feed</h3>
-          {activeCategory && (
-            <button onClick={() => setActiveCategory(null)} className="text-xs font-semibold text-[#3457D5] hover:underline">
-              Clear filter: {activeCategory}
-            </button>
-          )}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <Filter size={13} className="text-[#6B7385]" />
+            <label className="text-xs font-semibold text-[#6B7385]">Category</label>
+            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}
+              className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white">
+              <option value="">All Categories</option>
+              {ALLOWED_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs font-semibold text-[#6B7385]">Status</label>
+            {STATUSES.map((s) => (
+              <button key={s} onClick={() => setStatusFilter(s)}
+                className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border transition ${
+                  statusFilter === s
+                    ? 'bg-[#3457D5] text-white border-[#3457D5]'
+                    : 'border-[#E7E2D8] text-[#6B7385] hover:border-[#3457D5]/40'
+                }`}>
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
-        {filtered.length === 0 ? (
-          <EmptyState text="Excellent! No alerts match these criteria." />
+      </Card>
+
+      {error && (
+        <div className="text-xs font-semibold text-[#D14343] bg-[#FBE9E9] px-3 py-2 rounded-lg">
+          {error}
+        </div>
+      )}
+
+      <Card>
+        {loading ? (
+          <div className="py-14 text-center text-sm text-[#6B7385]">Loading alerts...</div>
+        ) : filtered.length === 0 ? (
+          <EmptyState text="No alerts yet. Alerts will appear when AI detects critical behaviors." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[10px] text-[#6B7385] font-semibold uppercase border-b border-[#E7E2D8]">
-                  <th className="py-2 pr-3">Alert</th>
-                  <th className="py-2 pr-3">Agent</th>
-                  <th className="py-2 pr-3">Queue</th>
-                  <th className="py-2 pr-3">Time</th>
-                  <th className="py-2 pr-3">Severity</th>
-                  <th className="py-2 pr-3">Confidence</th>
-                  <th className="py-2 pr-3">Status</th>
-                  <th className="py-2 pr-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((a) => (
-                  <tr key={a.id} className="border-b border-[#E7E2D8]/70 hover:bg-[#F7F4EE] transition">
-                    <td className="py-2.5 pr-3 font-semibold text-[#1D2433]">{a.incident}</td>
-                    <td className="py-2.5 pr-3 text-[#1D2433]">{a.agent}</td>
-                    <td className="py-2.5 pr-3 text-[#6B7385]">{a.queue}</td>
-                    <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{new Date(a.time).toLocaleString()}</td>
-                    <td className="py-2.5 pr-3"><SeverityBadge level={a.severity} /></td>
-                    <td className="py-2.5 pr-3">
-                      <span className={`text-xs font-semibold ${a.confidence >= 90 ? 'text-[#D14343]' : 'text-[#C9862B]'}`}>{a.confidence}%</span>
-                    </td>
-                    <td className="py-2.5 pr-3"><SeverityBadge level={a.status} /></td>
-                    <td className="py-2.5 pr-3">
-                      <div className="flex gap-2">
-                        <button onClick={() => navigate(`/calls/${a.call_id}`)} className="text-xs font-semibold text-[#3457D5] hover:underline">View Call</button>
-                        <button onClick={() => assign(a.id)} className="text-xs font-semibold text-[#1D2433] hover:underline">Assign</button>
-                        <button onClick={() => resolve(a.id)} className="text-xs font-semibold text-[#1C9A6C] hover:underline">Resolve</button>
-                        <button onClick={() => handleEmailPreview(a)} className="text-xs font-semibold text-[#6B7385] flex items-center gap-1 hover:underline"><Mail size={11} /> Email</button>
+          <div className="space-y-3">
+            {filtered.map((a) => {
+              const Icon = CATEGORY_ICONS[a.category] || Bell
+              const color = CATEGORY_COLORS[a.category] || '#3457D5'
+              return (
+                <div key={a.id}
+                  className="border border-[#E7E2D8] rounded-xl p-4 hover:border-[#3457D5]/30 transition">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                      style={{ background: color + '15' }}>
+                      <Icon size={16} style={{ color }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-bold text-[#1D2433]">{a.category}</span>
+                        <SeverityBadge level={a.severity} />
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                          a.status === 'Resolved' ? 'bg-[#E7F7EF] text-[#1C9A6C]'
+                          : a.status === 'Acknowledged' ? 'bg-[#EEF1FE] text-[#3457D5]'
+                          : 'bg-[#FCF1DF] text-[#C9862B]'
+                        }`}>
+                          {a.status}
+                        </span>
+                        {a.confidence && (
+                          <span className="text-[10px] text-[#6B7385]">
+                            Confidence: {a.confidence}%
+                          </span>
+                        )}
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <div className="text-xs text-[#6B7385] mb-1.5">
+                        {a.agent_name && <span>Agent: {a.agent_name} · </span>}
+                        {a.queue && <span>Queue: {a.queue} · </span>}
+                        {a.call_id && <span>Call: {a.call_id} · </span>}
+                        {a.created_at && <span>{new Date(a.created_at).toLocaleString()}</span>}
+                      </div>
+                      <div className="flex gap-2 mt-2">
+                        {a.status === 'Open' && (
+                          <button onClick={() => handleAcknowledge(a.id)}
+                            className="text-[10px] font-semibold px-2.5 py-1 rounded-lg border border-[#E7E2D8] hover:border-[#3457D5]">
+                            Acknowledge
+                          </button>
+                        )}
+                        {a.status !== 'Resolved' && (
+                          <button onClick={() => handleResolve(a.id)}
+                            className="text-[10px] font-semibold px-2.5 py-1 rounded-lg bg-[#1C9A6C] text-white hover:opacity-90">
+                            Resolve
+                          </button>
+                        )}
+                        <button onClick={() => handleViewEmail(a.id)}
+                          className="text-[10px] font-semibold px-2.5 py-1 rounded-lg border border-[#E7E2D8] hover:border-[#3457D5] flex items-center gap-1">
+                          <Mail size={10} /> Email Preview
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
           </div>
         )}
       </Card>
 
-      {/* Email Preview Modal */}
-      {emailPreview && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setEmailPreview(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-[480px] p-5 relative shadow-xl">
-            <button onClick={() => setEmailPreview(null)} className="absolute top-3 right-3 text-[#6B7385] hover:text-[#1D2433]"><X size={16} /></button>
-            <div className="text-xs text-[#6B7385] mb-1">Subject</div>
-            <div className="font-semibold text-[#1D2433] mb-3">🚨 {emailPreview.incident} — {emailPreview.call_id}</div>
-            <div className="text-xs text-[#6B7385] mb-1">Recipients</div>
-            <div className="text-sm text-[#1D2433] mb-3">rohan.mehta@acmebpo.com</div>
-            <div className="border border-[#E7E2D8] rounded-xl p-3 text-xs space-y-1 bg-[#F7F4EE]">
-              <div><b>Agent:</b> {emailPreview.agent}</div>
-              <div><b>Call ID:</b> {emailPreview.call_id}</div>
-              <div><b>Severity:</b> {emailPreview.severity}</div>
-              <div><b>AI Detection:</b> {emailPreview.emailData?.body?.detection || emailPreview.incident}</div>
-              <div><b>Confidence:</b> {emailPreview.emailData?.body?.confidence || `${emailPreview.confidence}%`}</div>
+      {/* Email Modal */}
+      {selectedEmail && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => setSelectedEmail(null)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-[#1D2433]">Email Preview</h3>
+              <button onClick={() => setSelectedEmail(null)} className="text-[#6B7385]">✕</button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <div className="text-[10px] font-semibold text-[#6B7385] uppercase">Subject</div>
+                <div className="text-sm font-semibold">{selectedEmail.subject}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold text-[#6B7385] uppercase">Body</div>
+                <pre className="text-xs text-[#1D2433] bg-[#F7F4EE] p-3 rounded-lg whitespace-pre-wrap">
+                  {selectedEmail.body}
+                </pre>
+              </div>
             </div>
           </div>
         </div>

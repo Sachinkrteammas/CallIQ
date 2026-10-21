@@ -32,3 +32,9 @@ class Setting(Base):
     short_call_max = Column(Integer, default=120)      # <= 2 min = Short
     medium_call_max = Column(Integer, default=600)     # 2-10 min = Medium
     # > medium_call_max = Long
+
+
+monthly_target = Column(Integer, default=30)
+monthly_max = Column(Integer, default=60)    # ← NEW
+daily_target = Column(Integer, default=1)
+daily_max = Column(Integer, default=3)       # ← NEW

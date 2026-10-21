@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.core.config import get_settings
 from app.database import engine
-from app.routers import kpis, conversation, calls, agents, incidents, alerts, settings as settings_router, client_overview, ai_prompts, auth, client_settings
+from app.routers import kpis, conversation, calls, agents, incidents, alerts, settings as settings_router, client_overview, ai_prompts, auth, client_settings,auth
 from app.routers import reports
 from app.routers import reports
 from app.routers import reports
@@ -55,7 +55,6 @@ app.include_router(client_settings.router)
 app.include_router(reports.router)
 app.include_router(reports.router)
 app.include_router(reports.router)
-
 
 @app.on_event("startup")
 def _startup():
