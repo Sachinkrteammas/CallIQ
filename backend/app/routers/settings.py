@@ -56,6 +56,16 @@ def _ensure_tables(db: Session):
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
     """))
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS agent_email_mappings (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            agent_id VARCHAR(100) NOT NULL UNIQUE,
+            email VARCHAR(255) NOT NULL,
+            full_name VARCHAR(255),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+    """))
     db.commit()
 
 
@@ -530,3 +540,46 @@ def update_security(req: SecurityUpdate, user=Depends(get_current_user), db: Ses
         db.execute(text(f"UPDATE settings_security SET {', '.join(fields)} WHERE id = 1"), vals)
         db.commit()
     return {"message": "Security settings updated"}
+
+
+# ─── Agent Email Mappings (Excel upload support) ──────────────────────────
+
+
+class AgentEmailMapping(BaseModel):
+    agent_id: str
+    email: str
+    full_name: Optional[str] = None
+
+
+@router.get("/agent-emails")
+def list_agent_emails(user=Depends(get_current_user), db: Session = Depends(get_db)):
+    _init_settings(db)
+    rows = db.execute(text("SELECT agent_id, email, full_name FROM agent_email_mappings ORDER BY agent_id")).fetchall()
+    return [{"agent_id": r[0], "email": r[1], "full_name": r[2]} for r in rows]
+
+
+@router.post("/agent-emails")
+def upsert_agent_emails(mappings: List[AgentEmailMapping], user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only admins can update agent emails")
+    _init_settings(db)
+    for m in mappings:
+        if not m.agent_id or not m.email:
+            continue
+        db.execute(text("""
+            INSERT INTO agent_email_mappings (agent_id, email, full_name)
+            VALUES (:agent_id, :email, :full_name)
+            ON DUPLICATE KEY UPDATE email = VALUES(email), full_name = VALUES(full_name)
+        """), {"agent_id": m.agent_id.strip(), "email": m.email.strip(), "full_name": (m.full_name or "").strip() or None})
+    db.commit()
+    return {"message": "Agent emails saved", "count": len(mappings)}
+
+
+@router.delete("/agent-emails/{agent_id}")
+def delete_agent_email(agent_id: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only admins can delete agent emails")
+    _init_settings(db)
+    db.execute(text("DELETE FROM agent_email_mappings WHERE agent_id = :agent_id"), {"agent_id": agent_id})
+    db.commit()
+    return {"message": "Deleted"}

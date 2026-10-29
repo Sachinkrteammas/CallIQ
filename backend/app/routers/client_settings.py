@@ -34,7 +34,10 @@ def _ensure_table(db: Session):
             criticality_sla_requirement INT DEFAULT 3,
             criticality_process_complexity INT DEFAULT 3,
             short_call_max INT DEFAULT 120,
-            medium_call_max INT DEFAULT 600
+            medium_call_max INT DEFAULT 600,
+            enable_sales_category_filter TINYINT(1) DEFAULT 0,
+            sales_interested_values JSON,
+            sales_not_interested_values JSON
         )
     """))
     # Safe migrations
@@ -50,6 +53,17 @@ def _ensure_table(db: Session):
         ("criticality_process_complexity", "INT DEFAULT 3"),
         ("short_call_max", "INT DEFAULT 120"),
         ("medium_call_max", "INT DEFAULT 600"),
+        ("enable_sales_category_filter", "TINYINT(1) DEFAULT 0"),
+        ("sales_interested_values", "JSON"),
+        ("sales_not_interested_values", "JSON"),
+        ("audit_mode", "VARCHAR(20) DEFAULT 'monthly'"),
+        ("monthly_target", "INT DEFAULT 30"),
+        ("monthly_max", "INT DEFAULT 60"),
+        ("daily_target", "INT DEFAULT 1"),
+        ("daily_max", "INT DEFAULT 3"),
+        ("short_call_count", "INT DEFAULT 5"),
+        ("medium_call_count", "INT DEFAULT 15"),
+        ("long_call_count", "INT DEFAULT 10"),
     ]:
         try:
             db.execute(text(f"ALTER TABLE client_settings ADD COLUMN {col} {dtype}"))
@@ -169,6 +183,22 @@ def _settings_response(
     if settings:
         selected_agents = settings.agents or [a["username"] for a in agents_list]
         total = _calculate_total(settings, selected_agents)
+        sales_interested = getattr(settings, "sales_interested_values", None) or []
+        sales_not_interested = getattr(settings, "sales_not_interested_values", None) or []
+        if isinstance(sales_interested, str):
+            try:
+                import json
+
+                sales_interested = json.loads(sales_interested)
+            except Exception:
+                sales_interested = []
+        if isinstance(sales_not_interested, str):
+            try:
+                import json
+
+                sales_not_interested = json.loads(sales_not_interested)
+            except Exception:
+                sales_not_interested = []
         return {
             "client_id": client_id,
             "total": total,
@@ -191,6 +221,9 @@ def _settings_response(
             "criticality_process_complexity": settings.criticality_process_complexity or 3,
             "short_call_max": settings.short_call_max or 120,
             "medium_call_max": settings.medium_call_max or 600,
+            "enable_sales_category_filter": int(getattr(settings, "enable_sales_category_filter", 0) or 0),
+            "sales_interested_values": sales_interested or [],
+            "sales_not_interested_values": sales_not_interested or [],
         }
 
     return {
@@ -215,6 +248,9 @@ def _settings_response(
         "criticality_process_complexity": 3,
         "short_call_max": 120,
         "medium_call_max": 600,
+        "enable_sales_category_filter": 0,
+        "sales_interested_values": [],
+        "sales_not_interested_values": [],
     }
 
 
@@ -260,13 +296,15 @@ def upsert_client_settings(
         raise HTTPException(status_code=404, detail="Client not found")
 
     settings = db.query(Setting).filter(Setting.client_id == payload.client_id).first()
+    data = payload.model_dump()
     if settings:
-        for key, value in payload.model_dump().items():
-            setattr(settings, key, value)
+        for key, value in data.items():
+            if hasattr(settings, key):
+                setattr(settings, key, value)
         # Auto-compute criticality
         settings.client_criticality = _auto_criticality(settings)
     else:
-        settings = Setting(**payload.model_dump())
+        settings = Setting(**data)
         settings.client_criticality = _auto_criticality(settings)
         db.add(settings)
     db.commit()

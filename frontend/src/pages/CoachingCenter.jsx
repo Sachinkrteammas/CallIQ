@@ -9,9 +9,9 @@ import {
   Plus, Trash2, RefreshCw, Activity,
 } from 'lucide-react'
 
-const STATUSES = ['Needs Coaching', 'Assigned', 'Completed', 'Escalated']
-const statusIcon = { 'Needs Coaching': Target, 'Assigned': Clock, 'Completed': CheckCircle, 'Escalated': AlertTriangle }
-const statusColor = { 'Needs Coaching': '#C9862B', 'Assigned': '#3457D5', 'Completed': '#1C9A6C', 'Escalated': '#D14343' }
+const STATUSES = ['Needs Coaching', 'Assigned', 'Completed']
+const statusIcon = { 'Needs Coaching': Target, 'Assigned': Clock, 'Completed': CheckCircle }
+const statusColor = { 'Needs Coaching': '#C9862B', 'Assigned': '#3457D5', 'Completed': '#1C9A6C' }
 
 export default function CoachingCenter() {
   const { isAdmin } = useAuth()
@@ -50,7 +50,8 @@ export default function CoachingCenter() {
 
   const advance = async (item) => {
     const idx = STATUSES.indexOf(item.status)
-    const next = STATUSES[Math.min(idx + 1, STATUSES.length - 1)]
+    if (idx === -1 || idx >= STATUSES.length - 1) return
+    const next = STATUSES[idx + 1]
     try {
       await updateCoaching(item.id, { status: next })
       setItems(prev => prev.map(x => x.id === item.id ? { ...x, status: next } : x))
@@ -97,13 +98,13 @@ export default function CoachingCenter() {
   }
 
   const onAgentSelect = (agentId) => {
-    const agent = allAgents.find(a => a.id === agentId)
+    const agent = allAgents.find(a => a.id === agentId || a.agent_id === agentId)
     if (agent) {
       setNewItem(prev => ({
         ...prev,
-        agent_id: agent.id,
-        agent_name: agent.name,
-        team: agent.team,
+        agent_id: agent.id || agent.agent_id,
+        agent_name: agent.name || agent.agent_id || agent.id,
+        team: agent.team || 'General',
       }))
     }
   }
@@ -178,9 +179,13 @@ export default function CoachingCenter() {
               <select value={newItem.agent_id} onChange={e => onAgentSelect(e.target.value)}
                 className="w-full mt-1 px-3 py-2 rounded-xl border border-[#E7E2D8] text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#3457D5]/30">
                 <option value="">-- Select Agent --</option>
-                {allAgents.map(a => (
-                  <option key={a.id} value={a.id}>{a.name} ({a.id}) — Score: {a.avg_score}</option>
-                ))}
+                {(Array.isArray(allAgents) ? allAgents : (allAgents?.agents || [])).map((a, idx) => {
+                  const aid = a.id || a.agent_id || a.username
+                  const aname = a.name || a.agent_id || a.username || aid
+                  return (
+                    <option key={aid || idx} value={aid}>{aname}{aid ? ` (${aid})` : ''}{a.avg_score !== undefined ? ` — Score: ${a.avg_score}` : ''}</option>
+                  )
+                })}
               </select>
             </div>
             <div>
@@ -212,7 +217,7 @@ export default function CoachingCenter() {
       )}
 
       {/* Status Pipeline */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         {STATUSES.map((status) => {
           const bucket = items.filter((i) => i.status === status)
           const Icon = statusIcon[status]
@@ -251,8 +256,8 @@ export default function CoachingCenter() {
                     <p className="text-[11px] text-[#6B7385] line-clamp-2 mb-2">{c.recommendation}</p>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-semibold text-[#1C9A6C]">{c.estimated_improvement}</span>
-                      {status !== 'Completed' && status !== 'Escalated' && isAdmin && (
-                        <button onClick={(e) => { e.stopPropagation(); advance(c) }} className="text-[10px] font-semibold text-[#3457D5] flex items-center gap-0.5">
+                      {status !== 'Completed' && isAdmin && (
+                        <button onClick={(e) => { e.stopPropagation(); const reason = prompt('Enter query/reason before moving to next stage (optional):'); if (reason === null) return; advance(c); }} className="text-[10px] font-semibold text-[#3457D5] flex items-center gap-0.5">
                           Advance <ArrowRight size={10} />
                         </button>
                       )}
@@ -338,9 +343,9 @@ export default function CoachingCenter() {
             <div>
               <div className="text-xs font-semibold text-[#6B7385] mb-1">Expected Improvement</div>
               <p className="text-sm font-semibold text-[#1C9A6C]">{selectedItem.estimated_improvement}</p>
-              {selectedItem.status !== 'Completed' && selectedItem.status !== 'Escalated' && isAdmin && (
+              {selectedItem.status !== 'Completed' && isAdmin && (
                 <div className="mt-3">
-                  <button onClick={() => advance(selectedItem)} className="text-xs font-semibold px-4 py-2 rounded-xl bg-[#3457D5] text-white hover:opacity-90 transition">
+                  <button onClick={() => { const reason = prompt('Enter query/reason before moving to next stage (optional):'); if (reason === null) return; advance(selectedItem); }} className="text-xs font-semibold px-4 py-2 rounded-xl bg-[#3457D5] text-white hover:opacity-90 transition">
                     Assign Training
                   </button>
                 </div>

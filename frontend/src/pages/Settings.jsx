@@ -8,10 +8,11 @@ import {
   getNotificationRules, addNotificationRule, updateNotificationRule, deleteNotificationRule,
   getSettingsIntegrations, addIntegration, updateIntegration, deleteIntegration,
   getSecuritySettings, updateSecuritySettings,
+  getAgentEmails, saveAgentEmails,
 } from '../api/client.js'
 import {
   Settings as SettingsIcon, Users as UsersIcon, Bell, Link as LinkIcon, Shield,
-  Phone, MessageSquare, Database, Ticket, Cloud, Mail, Plus, Trash2, Save, X, UserPlus, Filter, SlidersHorizontal,
+  Phone, MessageSquare, Database, Ticket, Cloud, Mail, Plus, Trash2, Save, X, UserPlus, Filter, SlidersHorizontal, Upload,
 } from 'lucide-react'
 
 const integrIcons = { Phone, MessageSquare, Database, Ticket, Cloud, Mail }
@@ -47,6 +48,9 @@ export default function Settings() {
 
   const [security, setSecurity] = useState({})
   const [securitySaving, setSecuritySaving] = useState(false)
+  const [agentEmails, setAgentEmails] = useState([])
+  const [agentEmailUploading, setAgentEmailUploading] = useState(false)
+  const [agentEmailNotice, setAgentEmailNotice] = useState(null)
 
   const tabs = [
     { id: 'workspace', label: 'Workspace', icon: SettingsIcon },
@@ -54,6 +58,7 @@ export default function Settings() {
     { id: 'notifications', label: 'Notifications', icon: Bell },
     // { id: 'integrations', label: 'Integrations', icon: LinkIcon },
     { id: 'security', label: 'Security', icon: Shield },
+    { id: 'agentemails', label: 'Agent Emails', icon: Mail },
     { id: 'client', label: 'Client Setting', icon: SlidersHorizontal },
   ]
 
@@ -92,14 +97,21 @@ export default function Settings() {
     } catch { /* ignore */ }
   }, [])
 
+  const loadAgentEmails = useCallback(async () => {
+    try {
+      const data = await getAgentEmails()
+      setAgentEmails(data || [])
+    } catch { /* ignore */ }
+  }, [])
+
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      await Promise.all([loadWorkspace(), loadUsers(), loadNotifications(), loadIntegrations(), loadSecurity()])
+      await Promise.all([loadWorkspace(), loadUsers(), loadNotifications(), loadIntegrations(), loadSecurity(), loadAgentEmails()])
       setLoading(false)
     }
     load()
-  }, [loadWorkspace, loadUsers, loadNotifications, loadIntegrations, loadSecurity])
+  }, [loadWorkspace, loadUsers, loadNotifications, loadIntegrations, loadSecurity, loadAgentEmails])
 
   useEffect(() => {
     if (activeTab === 'users') {
@@ -219,6 +231,46 @@ export default function Settings() {
       setSecurity(prev => ({ ...prev, [key]: newVal }))
     } catch { /* ignore */ }
     setSecuritySaving(false)
+  }
+
+  const handleAgentEmailUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setAgentEmailUploading(true)
+    setAgentEmailNotice(null)
+    try {
+      const text = await file.text()
+      const lines = text.split(/\r?\n/)
+      const mappings = []
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        if (!line.trim()) continue
+        const parts = line.split(/,|\t/)
+        if (i === 0 && parts.length >= 2) {
+          const h1 = parts[0].toLowerCase()
+          const h2 = parts[1].toLowerCase()
+          if (h1.includes('agent') && h2.includes('email')) continue
+        }
+        const agentId = (parts[0] || '').trim().replace(/"/g, '')
+        const email = (parts[1] || '').trim().replace(/"/g, '')
+        const fullName = parts[2] ? parts[2].trim().replace(/"/g, '') : ''
+        if (agentId && email) {
+          mappings.push({ agent_id: agentId, email, full_name: fullName })
+        }
+      }
+      if (mappings.length === 0) {
+        setAgentEmailNotice({ type: 'error', text: 'No valid Agent ID/Email found in file' })
+      } else {
+        await saveAgentEmails(mappings)
+        await loadAgentEmails()
+        setAgentEmailNotice({ type: 'success', text: `Saved ${mappings.length} agent email mapping(s)` })
+      }
+    } catch (err) {
+      setAgentEmailNotice({ type: 'error', text: err?.response?.data?.detail || 'Failed to upload agent emails' })
+    } finally {
+      setAgentEmailUploading(false)
+      e.target.value = ''
+    }
   }
 
   if (loading) {
@@ -579,6 +631,51 @@ export default function Settings() {
             </div>
           </Card>
         </div>
+      )}
+
+      {/* ─── Agent Emails Tab ──────────────────────────────────────────── */}
+      {activeTab === 'agentemails' && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <SectionTitle>Agent Email Mapping</SectionTitle>
+            {isAdmin && (
+              <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#3457D5] text-white text-xs font-semibold hover:bg-[#2a45b0] cursor-pointer">
+                <Upload size={13} />
+                {agentEmailUploading ? 'Uploading...' : 'Upload Excel/CSV'}
+                <input type="file" accept=".csv,.txt,.xlsx" onChange={handleAgentEmailUpload} className="hidden" disabled={agentEmailUploading} />
+              </label>
+            )}
+          </div>
+          <p className="text-xs text-[#6B7385] mb-3">Upload CSV with columns: agent_id, email, full_name (header optional). Agents will receive mails as per alerts/notifications.</p>
+          {agentEmailNotice && (
+            <div className={`mb-3 text-xs font-semibold px-3 py-2 rounded-xl ${agentEmailNotice.type === 'success' ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#FBE9E9] text-[#D14343]'}`}>
+              {agentEmailNotice.text}
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[10px] text-[#6B7385] font-semibold uppercase border-b border-[#E7E2D8]">
+                  <th className="py-2 pr-3">Agent ID</th>
+                  <th className="py-2 pr-3">Email</th>
+                  <th className="py-2 pr-3">Full Name</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agentEmails.map((m, idx) => (
+                  <tr key={idx} className="border-b border-[#E7E2D8]/70">
+                    <td className="py-2.5 pr-3 font-semibold text-[#1D2433]">{m.agent_id}</td>
+                    <td className="py-2.5 pr-3 text-[#3457D5]">{m.email}</td>
+                    <td className="py-2.5 pr-3 text-[#6B7385]">{m.full_name || '-'}</td>
+                  </tr>
+                ))}
+                {agentEmails.length === 0 && (
+                  <tr><td colSpan="3" className="py-6 text-center text-[#6B7385] text-xs">No agent email mappings found</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
     {/* ─── Client Settings Tab ───────────────────────────────────────── */}
       {activeTab === 'client' && <ClientSettings />}

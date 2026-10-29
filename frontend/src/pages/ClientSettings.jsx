@@ -36,6 +36,10 @@ function getDefaultForm(clientId) {
     criticality_escalation_risk: 3,
     criticality_sla_requirement: 3,
     criticality_process_complexity: 3,
+
+    enable_sales_category_filter: 0,
+    sales_interested_values: [],
+    sales_not_interested_values: [],
   }
 }
 
@@ -136,6 +140,10 @@ export default function ClientSettings() {
           criticality_escalation_risk: data.criticality_escalation_risk ?? 3,
           criticality_sla_requirement: data.criticality_sla_requirement ?? 3,
           criticality_process_complexity: data.criticality_process_complexity ?? 3,
+
+          enable_sales_category_filter: data.enable_sales_category_filter ?? 0,
+          sales_interested_values: Array.isArray(data.sales_interested_values) ? data.sales_interested_values : [],
+          sales_not_interested_values: Array.isArray(data.sales_not_interested_values) ? data.sales_not_interested_values : [],
         })
       })
       .catch((err) => {
@@ -571,6 +579,46 @@ export default function ClientSettings() {
                     onChange={(e) => setForm((p) => ({ ...p, campaign_filter: e.target.value.split(',').filter(Boolean) }))} />
                 </div>
               </div>
+            </div>
+
+            {/* SECTION 6: Sales Category Audit Filter */}
+            <div className="mb-6 p-4 rounded-xl bg-[#FFF7ED] border border-[#C9862B]/30">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-xs font-bold text-[#1D2433] uppercase">6. Sales Category Audit Filter</h3>
+                  <p className="text-[10px] text-[#6B7385] mt-0.5">Interested/Not Interested ko choose karke audit hone dene ka setting</p>
+                </div>
+                <label className="flex items-center gap-2 text-xs font-semibold text-[#1D2433]">
+                  <input type="checkbox"
+                    checked={!!form.enable_sales_category_filter}
+                    onChange={(e) => setForm((p) => ({ ...p, enable_sales_category_filter: e.target.checked ? 1 : 0 }))}
+                    className="accent-[#C9862B]" />
+                  Enable
+                </label>
+              </div>
+              {!!form.enable_sales_category_filter && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-semibold text-[#1C9A6C] uppercase">Interested (comma separated)</label>
+                    <input disabled={settingsLoading}
+                      className="rounded-xl border border-[#1C9A6C]/30 bg-white px-3 py-2 text-sm"
+                      value={(form.sales_interested_values || []).join(',')}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_interested_values: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))}
+                      placeholder="Interested, Sale, Converted" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-semibold text-[#D14343] uppercase">Not Interested (comma separated)</label>
+                    <input disabled={settingsLoading}
+                      className="rounded-xl border border-[#D14343]/30 bg-white px-3 py-2 text-sm"
+                      value={(form.sales_not_interested_values || []).join(',')}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_not_interested_values: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))}
+                      placeholder="Not Interested, DNC, Rejected" />
+                  </div>
+                  <div className="col-span-2 text-[10px] text-[#6B7385]">
+                    Jab enable ho, toh sirf selected categories par audit apply hoga aur interested calls ko priority se audit karaya ja sakta hai.
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end mt-5">

@@ -31,6 +31,9 @@ class SettingsUpsert(BaseModel):
     long_call_count: int = Field(default=10)
     short_call_max: int = Field(default=120)
     medium_call_max: int = Field(default=600)
+    enable_sales_category_filter: int = Field(default=0)
+    sales_interested_values: List[str] = Field(default_factory=list)
+    sales_not_interested_values: List[str] = Field(default_factory=list)
 
 
 class SettingsOut(BaseModel):
@@ -64,3 +67,6 @@ class SettingsOut(BaseModel):
     long_call_count: int = 10
     short_call_max: int = 120
     medium_call_max: int = 600
+    enable_sales_category_filter: int = 0
+    sales_interested_values: List[str] = Field(default_factory=list)
+    sales_not_interested_values: List[str] = Field(default_factory=list)

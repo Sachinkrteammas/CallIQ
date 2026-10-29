@@ -32,12 +32,13 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:5173"
 
-    # Deepgram STT
+    # STT
     stt_api_url: str = Field(default="https://api.deepgram.com/v1/listen", alias="STT_API_URL")
     stt_api_key: str = Field(default="", alias="STT_API_KEY")
     stt_mock_enabled: bool = Field(default=False, alias="STT_MOCK_ENABLED")
     stt_model: str = Field(default="nova", alias="STT_MODEL")
     stt_language: str = Field(default="hi-Latn", alias="STT_LANGUAGE")
+    stt_api_base_url: str = Field(default="http://192.168.11.243:8030", alias="STT_API_BASE_URL")
 
     # LLM / OpenAI
     llm_api_url: str = Field(default="https://llm.example.com/audit", alias="LLM_API_URL")

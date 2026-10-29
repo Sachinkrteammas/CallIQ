@@ -99,6 +99,10 @@ export const deleteIntegration = (id) => api.delete(`/settings/integrations/${id
 export const getSecuritySettings = () => api.get('/settings/security').then(r => r.data)
 export const updateSecuritySettings = (payload) => api.put('/settings/security', payload).then(r => r.data)
 
+export const getAgentEmails = () => api.get('/settings/agent-emails').then(r => r.data)
+export const saveAgentEmails = (payload) => api.post('/settings/agent-emails', payload).then(r => r.data)
+export const deleteAgentEmail = (agentId) => api.delete(`/settings/agent-emails/${encodeURIComponent(agentId)}`).then(r => r.data)
+
 export const listAiPrompts = (clientId) =>
   api.get('/settings/ai-prompts', { params: clientId ? { client_id: clientId } : {} }).then(r => r.data)
 export const getAiPrompt = (id) => api.get(`/settings/ai-prompts/${id}`).then(r => r.data)

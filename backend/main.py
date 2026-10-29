@@ -61,6 +61,9 @@ def _startup():
     _init_schema()
 
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "service": "CallIQ Backend"
+    }
