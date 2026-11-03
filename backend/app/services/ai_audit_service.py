@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -9,7 +9,7 @@ from app.core.config import get_settings
 from app.services.scoring_service import derive_scoring, normalize_section_scores
 
 
-def _extract_json(content: str) -> dict[str, Any]:
+def _extract_json(content: str) -> Dict[str, Any]:
     text = (content or "").strip()
     if not text:
         return {}
@@ -161,7 +161,7 @@ def build_audit_prompt(template: str, transcript: str) -> str:
 # ═══════════════════════════════════════════════════════════
 # OPENROUTER PROVIDER
 # ═══════════════════════════════════════════════════════════
-async def _run_openrouter(prompt: str, api_key: str, model: str, base_url: str) -> dict[str, Any]:
+async def _run_openrouter(prompt: str, api_key: str, model: str, base_url: str) -> Dict[str, Any]:
     url = f"{base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -192,7 +192,7 @@ async def _run_openrouter(prompt: str, api_key: str, model: str, base_url: str) 
 # ═══════════════════════════════════════════════════════════
 # MOCK
 # ═══════════════════════════════════════════════════════════
-def _mock_audit_response() -> dict[str, Any]:
+def _mock_audit_response() -> Dict[str, Any]:
     return {
         "total_score": 80,
         "percentage": 80,
@@ -224,7 +224,7 @@ def _mock_audit_response() -> dict[str, Any]:
 # ═══════════════════════════════════════════════════════════
 # NORMALIZE — with STRICT sale_category validation
 # ═══════════════════════════════════════════════════════════
-def _normalize_audit_json(audit_json: dict[str, Any]) -> dict[str, Any]:
+def _normalize_audit_json(audit_json: Dict[str, Any]) -> Dict[str, Any]:
     payload = normalize_section_scores(audit_json or {})
     total_score, percentage, derived_ranking, fatal_flag = derive_scoring(payload)
 
@@ -287,7 +287,7 @@ def _normalize_audit_json(audit_json: dict[str, Any]) -> dict[str, Any]:
 # ═══════════════════════════════════════════════════════════
 # MAIN ENTRY
 # ═══════════════════════════════════════════════════════════
-async def run_ai_audit(prompt: str, transcript: str = "", voice_mail: bool = False) -> dict[str, Any]:
+async def run_ai_audit(prompt: str, transcript: str = "", voice_mail: bool = False) -> Dict[str, Any]:
     if voice_mail:
         return {}
     template = (prompt or "").strip()
