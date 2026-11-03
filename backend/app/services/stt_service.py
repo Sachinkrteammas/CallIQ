@@ -36,9 +36,9 @@ def _extract_deepgram_transcript(payload: Dict[str, Any]) -> str:
     return alternatives[0].get("transcript", "") or ""
 
 
-def _deepgram_params() -> dict[str, str]:
+def _deepgram_params() -> Dict[str, str]:
     settings = get_settings()
-    params: dict[str, str] = {
+    params: Dict[str, str] = {
         "model": settings.stt_model,
         "smart_format": "true",
         "punctuate": "true",
@@ -50,8 +50,7 @@ def _deepgram_params() -> dict[str, str]:
         params["language"] = settings.stt_language
     return params
 
-
-async def transcribe_audio(recording_path: str) -> dict[str, Any]:
+async def transcribe_audio(recording_path: str) -> Dict[str, Any]:
     settings = get_settings()
     if settings.stt_mock_enabled:
         return {
