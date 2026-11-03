@@ -40,8 +40,6 @@ def _fetch_dialer_payload(client: Client, settings: Setting) -> List[Dict[str, A
         print(f"Using table: {table_name}")
         print(f"Campaigns: {campaign_ids}")
 
-        connection_uri_underscore = client.dialer_ip.replace(".", "_")
-
         join_clause = ""
 
         if table_name == "vicidial_log":
@@ -57,18 +55,7 @@ def _fetch_dialer_payload(client: Client, settings: Setting) -> List[Dict[str, A
                 vc.call_date,
                 vc.lead_id,
                 r.length_in_sec,
-                IFNULL(
-                    REPLACE(
-                        r.location,
-                        'http://{client.dialer_ip}/RECORDINGS/MP3/',
-                        CONCAT(
-                            'http://192.168.10.3/{connection_uri_underscore}/',
-                            DATE_FORMAT(DATE(vc.call_date), '%%Y%%m%%d'),
-                            '/'
-                        )
-                    ),
-                    ''
-                ) AS file_url
+                IFNULL(r.location, '') AS file_url
             FROM {table_name} vc
             {join_clause}
             LEFT JOIN recording_log r

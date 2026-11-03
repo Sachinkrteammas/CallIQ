@@ -94,6 +94,10 @@ def run_once(limit: int = 20) -> int:
             .outerjoin(CallAudit, CallAudit.call_id == CallLog.call_id)
             .where(
                 CallLog.transcript.is_not(None),
+                CallLog.transcript != "",
+                CallLog.transcript.not_in(
+                    ["[TRANSCRIPT_FAILED]", "[RECORDING_MISSING]", "[NO_SPEECH]"]
+                ),
                 CallLog.voice_mail == False,  # ← NEW: Skip voicemail
                 CallAudit.id.is_(None),
             )

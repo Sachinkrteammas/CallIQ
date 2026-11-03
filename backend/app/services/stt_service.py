@@ -4,6 +4,7 @@ from typing import Any
 import httpx
 
 from app.core.config import get_settings
+from typing import Dict, Any
 
 
 VOICEMAIL_KEYWORDS = [
@@ -24,7 +25,7 @@ def is_voicemail(transcript: str) -> bool:
     )
 
 
-def _extract_deepgram_transcript(payload: dict[str, Any]) -> str:
+def _extract_deepgram_transcript(payload: Dict[str, Any]) -> str:
     results = payload.get("results", {})
     channels = results.get("channels", [])
     if not channels:
@@ -58,6 +59,13 @@ async def transcribe_audio(recording_path: str) -> dict[str, Any]:
             "voice_mail": False,
         }
 
+    recording_path = (recording_path or "").strip()
+    if recording_path.startswith("//"):
+        recording_path = f"http:{recording_path}"
+    elif "." in recording_path.split("/")[0] and not recording_path.startswith(("http://", "https://")):
+        # Stored as "host/path" without a scheme
+        recording_path = f"http://{recording_path}"
+
     if recording_path.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=180.0) as client:
             audio_resp = await client.get(recording_path)
@@ -70,11 +78,11 @@ async def transcribe_audio(recording_path: str) -> dict[str, Any]:
     transcript = await transcribe_audio_bytes(
         audio_bytes=audio_bytes,
         filename=recording_path,
-        content_type="application/octet-stream",
+        content_type="audio/mpeg",
     )
-    if not transcript:
-        raise RuntimeError("Transcription API did not include transcript")
 
+    # Empty transcript is valid (silence / ring-only calls). The worker
+    # stores it as "[NO_SPEECH]" instead of endlessly retrying.
     voice_mail = is_voicemail(transcript)
 
     return {
@@ -87,6 +95,8 @@ async def transcribe_audio_bytes(
     audio_bytes: bytes,
     filename: str = "recording.wav",
     content_type: str = "audio/wav",
+    poll_timeout: float = 300.0,
+    poll_interval: float = 3.0,
 ) -> str:
     settings = get_settings()
     if settings.stt_mock_enabled:
@@ -107,8 +117,12 @@ async def transcribe_audio_bytes(
         upload_resp = await client.post(f"{base_url}/audio/upload", files=files, data=data)
         upload_resp.raise_for_status()
 
-        transcript = ""
-        for _ in range(60):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + poll_timeout
+        ready = False
+        empty_reads = 0
+
+        while loop.time() < deadline:
             try:
                 status_resp = await client.get(
                     f"{base_url}/check-status", params={"fnames": fname}
@@ -117,17 +131,27 @@ async def transcribe_audio_bytes(
                 tasks = status_resp.json().get("tasks", [])
                 task = next((t for t in tasks if t.get("filename") == fname), None)
                 if task and task.get("audio") is True and task.get("transcription") is True:
+                    ready = True
                     out_resp = await client.get(
                         f"{base_url}/get-output",
                         params={"fname": fname, "output_type": "transcription"},
                     )
                     out_resp.raise_for_status()
                     transcript = out_resp.text.strip()
-                    break
+                    if transcript:
+                        return transcript
+                    # Output can lag behind the status flag; retry a few times
+                    # before accepting that the recording has no speech.
+                    empty_reads += 1
+                    if empty_reads >= 5:
+                        return ""
             except httpx.HTTPError:
                 pass
-            await asyncio.sleep(2)
+            await asyncio.sleep(poll_interval)
 
-    if not transcript:
-        raise RuntimeError("Transcription API did not return a transcript in time")
-    return transcript
+    if ready:
+        return ""
+
+    raise RuntimeError(
+        f"Transcription API did not finish within {int(poll_timeout)}s for {fname}"
+    )
