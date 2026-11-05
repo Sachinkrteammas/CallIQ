@@ -48,6 +48,17 @@ export default function CallDetails() {
     [call],
   )
 
+  // Prefer the audit's own parameter contract (mirrors the active prompt);
+  // fall back to the legacy fixed score keys for older audits.
+  const parameterEntries = useMemo(() => {
+    if (call?.parameters?.length) return call.parameters
+    return scoreEntries.map(([k, v]) => ({
+      key: k,
+      label: k.charAt(0).toUpperCase() + k.slice(1),
+      percentage: v || 0,
+    }))
+  }, [call, scoreEntries])
+
   const filteredTranscript = useMemo(
     () => (call?.transcript || []).filter((line) =>
       !transcriptSearch || (line.text || '').toLowerCase().includes(transcriptSearch.toLowerCase())
@@ -270,8 +281,8 @@ export default function CallDetails() {
               <div className="text-4xl font-extrabold text-[#1D2433]">{call.scores?.overall ?? 0}<span className="text-lg">%</span></div>
               <div className="text-xs text-[#6B7385]">Overall Conversation Score</div>
             </div>
-            {scoreEntries.map(([k, v]) => (
-              <ProgressBar key={k} label={k.charAt(0).toUpperCase() + k.slice(1)} value={v || 0} />
+            {parameterEntries.map((p) => (
+              <ProgressBar key={p.key} label={p.label} value={p.percentage || 0} />
             ))}
           </Card>
 

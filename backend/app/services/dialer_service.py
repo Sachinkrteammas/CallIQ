@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.call_log import CallLog
 from app.models.client import Client
 from app.models.settings import Setting
+from app.services.recording_url import normalize_recording_url
 
 
 def get_asterisk_connection(client: Client):
@@ -91,7 +92,9 @@ def _fetch_dialer_payload(client: Client, settings: Setting) -> List[Dict[str, A
                         "start_time": call_time,
                         "end_time": call_time + timedelta(seconds=duration),
                         "duration": duration,
-                        "recording_path": row["file_url"] or "",
+                        "recording_path": normalize_recording_url(
+                            row["file_url"] or "", call_time
+                        ),
                     }
                 )
 

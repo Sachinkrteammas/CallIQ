@@ -114,17 +114,42 @@ def _provided_total(data: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def weighted_total(sections: Dict[str, Any]) -> float:
-    total_weight = sum(SECTION_WEIGHTS.values()) or 1
-    acc = 0.0
+def weighted_total(
+    sections: Dict[str, Any],
+    weights: Optional[Dict[str, float]] = None,
+) -> float:
+    """Weighted average that works for any prompt's section/parameter names.
 
-    for name, weight in SECTION_WEIGHTS.items():
-        sec = sections.get(name)
+    Priority for each section weight:
+      1. explicit `weights` argument (usually the active prompt's weights)
+      2. `weight` stored inside the section
+      3. the section's `max_score`
+      4. legacy SECTION_WEIGHTS, then 1
+    """
+    if not sections:
+        return 0.0
 
-        if sec is not None:
-            acc += section_percentage(sec) * weight
+    if weights:
+        total_weight = sum(w for w in weights.values() if w and w > 0) or 1
+        acc = 0.0
+        for name, weight in weights.items():
+            sec = sections.get(name)
+            if sec is not None and weight and weight > 0:
+                acc += section_percentage(sec) * weight
+        return _clamp(acc / total_weight)
 
-    return _clamp(acc / total_weight)
+    derived: Dict[str, float] = {}
+    for name, sec in sections.items():
+        weight = 0.0
+        if isinstance(sec, dict):
+            weight = _to_float(sec.get("weight"))
+            if weight <= 0:
+                weight = _to_float(sec.get("max_score"))
+        if weight <= 0:
+            weight = float(SECTION_WEIGHTS.get(name, 1))
+        derived[name] = weight
+
+    return weighted_total(sections, derived)
 
 
 def ranking_for(score: float) -> str:

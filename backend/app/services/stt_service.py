@@ -1,9 +1,11 @@
 import asyncio
-from typing import Any
+from datetime import datetime
+from typing import Any, Optional
 
 import httpx
 
 from app.core.config import get_settings
+from app.services.recording_url import normalize_recording_url
 from typing import Dict, Any
 
 
@@ -50,7 +52,10 @@ def _deepgram_params() -> Dict[str, str]:
         params["language"] = settings.stt_language
     return params
 
-async def transcribe_audio(recording_path: str) -> Dict[str, Any]:
+async def transcribe_audio(
+    recording_path: str,
+    call_time: Optional[datetime] = None,
+) -> Dict[str, Any]:
     settings = get_settings()
     if settings.stt_mock_enabled:
         return {
@@ -58,12 +63,7 @@ async def transcribe_audio(recording_path: str) -> Dict[str, Any]:
             "voice_mail": False,
         }
 
-    recording_path = (recording_path or "").strip()
-    if recording_path.startswith("//"):
-        recording_path = f"http:{recording_path}"
-    elif "." in recording_path.split("/")[0] and not recording_path.startswith(("http://", "https://")):
-        # Stored as "host/path" without a scheme
-        recording_path = f"http://{recording_path}"
+    recording_path = normalize_recording_url(recording_path, call_time)
 
     if recording_path.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=180.0) as client:

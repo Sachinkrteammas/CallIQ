@@ -29,8 +29,8 @@ export function ClientProvider({ children }) {
   const [loading, setLoading] = useState(true)
   const [clientType, setClientType] = useState('Sales')
   const [clientId, setClientId] = useState('all')
-  const [fromDate, setFromDate] = useState(() => getDateRange(7).from)
-  const [toDate, setToDate] = useState(() => getDateRange(7).to)
+  const [fromDate, setFromDate] = useState(() => getDateRange(90).from)
+  const [toDate, setToDate] = useState(() => getDateRange(90).to)
 
   useEffect(() => {
     let cancelled = false

@@ -35,6 +35,7 @@ from pydub import AudioSegment
 from sqlalchemy import text
 
 from app.database import SessionLocal
+from app.services.recording_url import normalize_recording_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +64,7 @@ def download_audio(url: str, timeout: int = 30) -> Optional[str]:
 
     Handles 404 (file missing on server) and connection errors gracefully.
     """
+    url = normalize_recording_url(url)
     if not url or not url.lower().startswith(("http://", "https://")):
         log.warning("Invalid URL: %s", url)
         return None

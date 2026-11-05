@@ -53,7 +53,9 @@ def run_once(limit: int = 20, max_age_hours: int = 48) -> int:
                 continue
 
             try:
-                result = asyncio.run(transcribe_audio(call.recording_path))
+                result = asyncio.run(
+                    transcribe_audio(call.recording_path, call.start_time)
+                )
 
                 transcript = result["transcript"]
                 voice_mail = result["voice_mail"]

@@ -1,10 +1,11 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.database import get_db
+from app.services.audit_params import aggregate_parameters
 from .. import data
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -51,8 +52,7 @@ class CoachingCreate(BaseModel):
     status: Optional[str] = "Needs Coaching"
 
 
-# In-memory coaching store (seeded from GET /coaching)
-_COACHING_STORE: dict = {}
+# In-memory coaching store is no longer used — items persist in coaching_queue.
 
 
 # ═══════════════════════════════════════════════════════════
@@ -230,19 +230,69 @@ def _build_coaching_queue(client_id: Optional[int] = None, db: Session = None):
     return result
 
 
-def _seed_coaching_store(db: Session = None):
-    """Seed in-memory store once so Advance/Delete work on existing items."""
-    global _COACHING_STORE
-    if _COACHING_STORE:
+def _ensure_coaching_table(db: Session = None):
+    if db is None:
         return
     try:
-        if db is None:
-            db = next(get_db())
-        items = _build_coaching_queue(db=db)
-    except Exception:
-        items = []
-    for it in items:
-        _COACHING_STORE[it["id"]] = it
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS coaching_queue (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                agent_id VARCHAR(20) NOT NULL,
+                agent_name VARCHAR(255) NOT NULL,
+                team VARCHAR(100) DEFAULT NULL,
+                status VARCHAR(50) DEFAULT 'Needs Coaching',
+                recommendation TEXT,
+                estimated_improvement VARCHAR(255) DEFAULT NULL,
+                evidence TEXT,
+                score_at_flag DECIMAL(5,1) DEFAULT NULL,
+                reason VARCHAR(255) DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        db.commit()
+    except Exception as exc:
+        print(f"[coaching] ensure table failed: {exc}")
+
+
+def _coaching_row_to_item(row) -> dict:
+    m = row._mapping if hasattr(row, "_mapping") else row
+    score = m["score_at_flag"]
+    return {
+        "id": m["id"],
+        "agent_id": m["agent_id"],
+        "agent_name": m["agent_name"],
+        "team": m["team"] or "General",
+        "status": m["status"] or "Needs Coaching",
+        "recommendation": m["recommendation"] or "",
+        "estimated_improvement": m["estimated_improvement"] or "",
+        "evidence": m["evidence"],
+        "score_at_flag": float(score) if score is not None else None,
+        "reason": m["reason"] or "",
+    }
+
+
+def _coaching_items_from_db(db: Session, client_id: Optional[int] = None) -> list:
+    _ensure_coaching_table(db)
+    rows = db.execute(text("""
+        SELECT id, agent_id, agent_name, team, status, recommendation,
+               estimated_improvement, evidence, score_at_flag, reason
+        FROM coaching_queue
+        ORDER BY updated_at DESC, id DESC
+    """)).mappings().all()
+    items = [_coaching_row_to_item(r) for r in rows]
+
+    if client_id:
+        try:
+            allowed = set(db.execute(text("""
+                SELECT DISTINCT agent_id FROM call_audits
+                WHERE client_id = :cid AND agent_id IS NOT NULL
+            """), {"cid": client_id}).scalars().all())
+        except Exception:
+            allowed = set()
+        if allowed:
+            items = [i for i in items if i["agent_id"] in allowed]
+    return items
 
 
 # ═══════════════════════════════════════════════════════════
@@ -257,29 +307,7 @@ def coaching_queue(
     """
     Returns an ARRAY of coaching items for the Coaching Center page.
     """
-    items = _build_coaching_queue(client_id=client_id, db=db)
-
-    # Merge in-memory store overrides (status changes from Advance, etc.)
-    if _COACHING_STORE:
-        seen = set()
-        merged = []
-        for it in items:
-            store_item = _COACHING_STORE.get(it["id"])
-            if store_item:
-                merged.append({**it, **store_item})
-            else:
-                merged.append(it)
-            seen.add(it["id"])
-        # Include items added manually via POST
-        for key, val in _COACHING_STORE.items():
-            if key not in seen:
-                merged.append(val)
-        return merged
-
-    # First call: seed store so updates/deletes have something to act on
-    for it in items:
-        _COACHING_STORE[it["id"]] = it
-    return items
+    return _coaching_items_from_db(db, client_id=client_id)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -288,11 +316,16 @@ def coaching_queue(
 # ═══════════════════════════════════════════════════════════
 
 @router.post("/coaching")
-def create_coaching_item(payload: CoachingCreate):
-    _seed_coaching_store()
-    item_id = payload.agent_id
-    item = {
-        "id": item_id,
+def create_coaching_item(payload: CoachingCreate, db: Session = Depends(get_db)):
+    _ensure_coaching_table(db)
+    result = db.execute(text("""
+        INSERT INTO coaching_queue
+            (agent_id, agent_name, team, status, recommendation,
+             estimated_improvement, reason, created_at, updated_at)
+        VALUES
+            (:agent_id, :agent_name, :team, :status, :recommendation,
+             :estimated_improvement, :reason, NOW(), NOW())
+    """), {
         "agent_id": payload.agent_id,
         "agent_name": payload.agent_name,
         "team": payload.team or "General",
@@ -300,11 +333,16 @@ def create_coaching_item(payload: CoachingCreate):
         "recommendation": payload.recommendation or "",
         "estimated_improvement": payload.estimated_improvement or "",
         "reason": payload.reason or "",
-        "score_at_flag": None,
-        "evidence": None,
-    }
-    _COACHING_STORE[item_id] = item
-    return item
+    })
+    db.commit()
+
+    item_id = result.lastrowid
+    row = db.execute(text("""
+        SELECT id, agent_id, agent_name, team, status, recommendation,
+               estimated_improvement, evidence, score_at_flag, reason
+        FROM coaching_queue WHERE id = :id
+    """), {"id": item_id}).mappings().one()
+    return _coaching_row_to_item(row)
 
 
 @router.post("/coaching/auto-flag")
@@ -312,52 +350,80 @@ def auto_flag_coaching(
     client_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    items = _build_coaching_queue(client_id=client_id, db=db)
+    _ensure_coaching_table(db)
+    suggestions = _build_coaching_queue(client_id=client_id, db=db)
+
+    existing = set(db.execute(text(
+        "SELECT DISTINCT agent_id FROM coaching_queue"
+    )).scalars().all())
+
     flagged = []
-    for it in items:
-        # If it isn't in store yet, add it
-        if it["id"] not in _COACHING_STORE:
-            _COACHING_STORE[it["id"]] = it
-            flagged.append({
-                "agent_id": it["agent_id"],
-                "name": it["agent_name"],
-                "score": it["score_at_flag"],
-                "reasons": [it["reason"]],
-            })
+    for it in suggestions:
+        agent_id = it.get("agent_id")
+        if not agent_id or agent_id in existing:
+            continue
+        db.execute(text("""
+            INSERT INTO coaching_queue
+                (agent_id, agent_name, team, status, recommendation,
+                 estimated_improvement, evidence, score_at_flag, reason,
+                 created_at, updated_at)
+            VALUES
+                (:agent_id, :agent_name, :team, :status, :recommendation,
+                 :estimated_improvement, :evidence, :score_at_flag, :reason,
+                 NOW(), NOW())
+        """), {
+            "agent_id": agent_id,
+            "agent_name": it.get("agent_name") or agent_id,
+            "team": it.get("team") or "General",
+            "status": it.get("status") or "Needs Coaching",
+            "recommendation": it.get("recommendation") or "",
+            "estimated_improvement": it.get("estimated_improvement") or "",
+            "evidence": it.get("evidence"),
+            "score_at_flag": it.get("score_at_flag"),
+            "reason": it.get("reason") or "",
+        })
+        existing.add(agent_id)
+        flagged.append({
+            "agent_id": agent_id,
+            "name": it.get("agent_name") or agent_id,
+            "score": it.get("score_at_flag"),
+            "reasons": [it.get("reason") or ""],
+        })
+    db.commit()
     return {"count": len(flagged), "flagged": flagged}
 
 
 @router.put("/coaching/{item_id}")
-def update_coaching_item(item_id: str, payload: CoachingUpdate):
-    _seed_coaching_store()
+def update_coaching_item(item_id: str, payload: CoachingUpdate, db: Session = Depends(get_db)):
+    _ensure_coaching_table(db)
+    updates = {k: v for k, v in payload.dict(exclude_unset=True).items() if v is not None}
+    if updates:
+        set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+        updates["item_id"] = item_id
+        db.execute(
+            text(f"UPDATE coaching_queue SET {set_clause}, updated_at = NOW() WHERE id = :item_id"),
+            updates,
+        )
+        db.commit()
 
-    if item_id not in _COACHING_STORE:
-        # Allow creating a stub if unknown id came in (e.g. new agent)
-        _COACHING_STORE[item_id] = {
-            "id": item_id,
-            "agent_id": item_id,
-            "agent_name": item_id,
-            "team": "General",
-            "status": "Needs Coaching",
-            "recommendation": "",
-            "estimated_improvement": "",
-            "reason": "",
-            "score_at_flag": None,
-            "evidence": None,
-        }
-
-    item = _COACHING_STORE[item_id]
-    for k, v in payload.dict(exclude_unset=True).items():
-        if v is not None:
-            item[k] = v
-    return item
+    row = db.execute(text("""
+        SELECT id, agent_id, agent_name, team, status, recommendation,
+               estimated_improvement, evidence, score_at_flag, reason
+        FROM coaching_queue WHERE id = :id
+    """), {"id": item_id}).mappings().one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Coaching item not found")
+    return _coaching_row_to_item(row)
 
 
 @router.delete("/coaching/{item_id}")
-def delete_coaching_item(item_id: str):
-    _seed_coaching_store()
-    removed = _COACHING_STORE.pop(item_id, None)
-    return {"deleted": bool(removed), "id": item_id}
+def delete_coaching_item(item_id: str, db: Session = Depends(get_db)):
+    _ensure_coaching_table(db)
+    result = db.execute(
+        text("DELETE FROM coaching_queue WHERE id = :id"), {"id": item_id}
+    )
+    db.commit()
+    return {"deleted": result.rowcount > 0, "id": item_id}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -433,51 +499,56 @@ def agent_comparison(
         rows = db.execute(text(f"""
             SELECT ca.agent_id, ca.audit_json
             FROM call_audits ca WHERE {wc}
+            ORDER BY ca.created_at DESC, ca.id DESC
         """), params).mappings().all()
     except Exception:
         rows = []
 
-    import json
-    agent_data = {}
+    agent_audits = {}
+    all_audits = []
     for r in rows:
+        audit = r["audit_json"]
         a = r["agent_id"]
-        j = r["audit_json"] if isinstance(r["audit_json"], dict) else {}
-        if isinstance(r["audit_json"], str):
-            try:
-                j = json.loads(r["audit_json"])
-            except Exception:
-                j = {}
-        sections = j.get("sections") or {}
-        if a not in agent_data:
-            agent_data[a] = {p: {"score": 0, "max": 0} for p in QUALITY_PARAMS}
-        for p in QUALITY_PARAMS:
-            s = sections.get(p) or {}
-            if s:
-                agent_data[a][p]["score"] += s.get("score", 0)
-                agent_data[a][p]["max"] += s.get("max_score", 0) or s.get("max", 0)
+        all_audits.append(audit)
+        agent_audits.setdefault(a, []).append(audit)
+
+    parameter_meta = aggregate_parameters(all_audits)
+    ordered_keys = [p["key"] for p in parameter_meta]
 
     result = []
-    for a, params_data in agent_data.items():
+    for a, audits in agent_audits.items():
+        per_param = {p["key"]: p for p in aggregate_parameters(audits)}
         row = {"agent_id": a, "parameters": {}}
-        for p in QUALITY_PARAMS:
-            t = params_data[p]
-            pct = round((t["score"] / t["max"]) * 100, 1) if t["max"] else 0
-            row["parameters"][p] = {"percentage": pct, "color": _rag(pct)}
+        for key in ordered_keys:
+            item = per_param.get(key) or {"percentage": 0, "color": "red"}
+            row["parameters"][key] = {
+                "percentage": item.get("percentage", 0),
+                "color": item.get("color", "red"),
+            }
         result.append(row)
 
     if not result:
         import random
         random.seed(42)
+        if not ordered_keys:
+            ordered_keys = QUALITY_PARAMS
+            parameter_meta = [
+                {"key": p, "label": PARAM_LABELS[p], "percentage": 0, "color": "red"}
+                for p in QUALITY_PARAMS
+            ]
         for a in data.AGENTS[:10]:
             row = {"agent_id": a["id"], "parameters": {}}
-            for p in QUALITY_PARAMS:
+            for key in ordered_keys:
                 pct = round(random.uniform(55, 92), 1)
-                row["parameters"][p] = {"percentage": pct, "color": _rag(pct)}
+                row["parameters"][key] = {"percentage": pct, "color": _rag(pct)}
             result.append(row)
 
     return {
         "comparison": result,
-        "parameters": [{"key": p, "label": PARAM_LABELS[p]} for p in QUALITY_PARAMS],
+        "parameters": [
+            {"key": item["key"], "label": item["label"]}
+            for item in parameter_meta
+        ],
     }
 
 
@@ -507,38 +578,22 @@ def agent_score_by_parameter(
     wc = " AND ".join(where)
 
     try:
-        rows = db.execute(text(f"SELECT ca.audit_json FROM call_audits ca WHERE {wc}"), params).scalars().all()
+        rows = db.execute(
+            text(f"SELECT ca.audit_json FROM call_audits ca WHERE {wc} ORDER BY ca.created_at DESC, ca.id DESC"),
+            params,
+        ).scalars().all()
     except Exception:
         rows = []
 
-    param_totals = {p: {"score": 0, "max": 0} for p in QUALITY_PARAMS}
-    import json
-    for row in rows:
-        j = row if isinstance(row, dict) else {}
-        if isinstance(row, str):
-            try:
-                j = json.loads(row)
-            except Exception:
-                j = {}
-        sections = j.get("sections") or {}
-        for p in QUALITY_PARAMS:
-            s = sections.get(p) or {}
-            if s:
-                param_totals[p]["score"] += s.get("score", 0)
-                param_totals[p]["max"] += s.get("max_score", 0) or s.get("max", 0)
-
-    result = []
-    for p in QUALITY_PARAMS:
-        t = param_totals[p]
-        pct = round((t["score"] / t["max"]) * 100, 1) if t["max"] else 0
-        result.append({
-            "key": p, "label": PARAM_LABELS[p],
-            "percentage": pct, "color": _rag(pct),
-        })
-
+    result = aggregate_parameters(list(rows or []))
     if not any(r["percentage"] > 0 for r in result):
         import random
         random.seed(hash(agent_id) % (2**31))
+        if not result:
+            result = [
+                {"key": p, "label": PARAM_LABELS[p], "percentage": 0, "color": "red"}
+                for p in QUALITY_PARAMS
+            ]
         for r in result:
             r["percentage"] = round(random.uniform(55, 95), 1)
             r["color"] = _rag(r["percentage"])
@@ -665,36 +720,17 @@ def agent_full_info(agent_id: str, db: Session = Depends(get_db)):
         return {"agent_id": agent_id, "message": "No audits found"}
 
     # Params
-    rows = db.execute(text("SELECT audit_json FROM call_audits WHERE agent_id = :aid LIMIT 500"),
-                      {"aid": agent_id}).scalars().all()
+    rows = db.execute(
+        text("""
+            SELECT audit_json FROM call_audits
+            WHERE agent_id = :aid
+            ORDER BY created_at DESC, id DESC
+            LIMIT 500
+        """),
+        {"aid": agent_id},
+    ).scalars().all()
 
-    import json
-    QUALITY_PARAMS = ["opening", "customer_understanding", "resolution_quality",
-                      "communication", "call_control", "process_adherence", "closing"]
-    param_totals = {p: {"score": 0, "max": 0} for p in QUALITY_PARAMS}
-    for row in rows:
-        j = row if isinstance(row, dict) else {}
-        if isinstance(row, str):
-            try:
-                j = json.loads(row)
-            except Exception:
-                j = {}
-        sections = j.get("sections") or {}
-        for p in QUALITY_PARAMS:
-            s = sections.get(p) or {}
-            if s:
-                param_totals[p]["score"] += s.get("score", 0)
-                param_totals[p]["max"] += s.get("max_score", 0) or s.get("max", 0)
-
-    params = []
-    for p in QUALITY_PARAMS:
-        t = param_totals[p]
-        pct = round((t["score"] / t["max"]) * 100, 1) if t["max"] else 0
-        params.append({
-            "key": p, "label": p.replace("_", " ").title(),
-            "percentage": pct,
-            "color": "green" if pct >= 80 else "amber" if pct >= 60 else "red",
-        })
+    params = aggregate_parameters(list(rows or []))
 
     total = int(stats["total"] or 0)
     avg_pct = float(stats["avg_pct"] or 0)

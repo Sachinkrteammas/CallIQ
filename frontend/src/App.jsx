@@ -17,6 +17,7 @@ import Alerts from './pages/Alerts.jsx'
 import Analytics from './pages/Analytics.jsx'
 import Reports from './pages/Reports.jsx'
 import AIConfig from './pages/AIConfig.jsx'
+import PromptBuilder from './components/promptBuilder/PromptBuilder.jsx'
 import Clients from './pages/Clients.jsx'
 import Settings from './pages/Settings.jsx'
 
@@ -69,6 +70,7 @@ function AppRoutes() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/ai-config" element={<AIConfig />} />
+        <Route path="/prompt-builder" element={<PromptBuilder />} />
         <Route path="/incidents" element={<IncidentCenter />} />
         <Route path="/alerts" element={<Alerts />} />
         <Route path="/clients" element={<Clients />} />

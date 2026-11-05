@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, PhoneCall, Users, Target, Brain, BarChart3,
   FileText, Settings, AlertTriangle, Bell, Users2, Settings2,
-  AudioWaveform, Headphones, TrendingUp, LogOut,
+  AudioWaveform, Headphones, TrendingUp, LogOut, Wand2,
 } from 'lucide-react'
 import { useAuth } from './AuthContext.jsx'
 
@@ -16,6 +16,7 @@ const adminItems = [
   // { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/reports', label: 'Reports', icon: FileText },
   { to: '/ai-config', label: 'AI Configuration', icon: Settings },
+  { to: '/prompt-builder', label: 'Prompt Builder', icon: Wand2 },
   { to: '/incidents', label: 'Incident Center', icon: AlertTriangle, badge: 5 },
   { to: '/alerts', label: 'Alerts', icon: Bell, badge: 3 },
   { to: '/clients', label: 'Clients', icon: Users2 },

@@ -7,6 +7,8 @@ from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional
 from ..database import get_db
+from ..services.recording_url import normalize_recording_url
+from ..services.audit_params import aggregate_parameters, extract_sections, coerce_json
 from .auth import get_current_user
 from fastapi import BackgroundTasks
 
@@ -698,11 +700,7 @@ def _coaching_recommendation(risk):
 
 
 def _parse_audit(row):
-    raw = row.get("audit_json")
-    if isinstance(raw, str):
-        raw = json.loads(raw)
-    if not isinstance(raw, dict):
-        raw = {}
+    raw = coerce_json(row.get("audit_json"))
     raw["_id"] = row.get("id")
     raw["_call_id"] = row.get("call_id", "")
     raw["_agent_id"] = row.get("agent_id", "")
@@ -712,7 +710,32 @@ def _parse_audit(row):
     raw["percentage"] = row.get("percentage", 0)
     raw["ranking"] = row.get("ranking", "Unknown")
     raw["fatal_flag"] = row.get("fatal_flag", False)
-    raw["_recording_path"] = row.get("recording_path")
+
+    # Sales classification columns are the source of truth; audit_json is a
+    # fallback for older rows written before these columns existed.
+    raw["sale_category"] = row.get("sale_category") or raw.get("sale_category") or "Unknown"
+    raw["invalid_reason"] = row.get("invalid_reason") or raw.get("invalid_reason")
+    raw["crm_sale_done"] = bool(
+        row.get("crm_sale_done") if row.get("crm_sale_done") is not None
+        else raw.get("crm_sale_done", False)
+    )
+    raw["customer_confirmation"] = (
+        row.get("customer_confirmation") or raw.get("customer_confirmation") or "Not Confirmed"
+    )
+    raw["order_information"] = (
+        row.get("order_information") or raw.get("order_information") or "Not Available"
+    )
+
+    # Prompt Builder audits return `parameter_scores`; expose them as sections
+    # so every aggregation helper sees one canonical shape.
+    if not isinstance(raw.get("sections"), dict) or not raw.get("sections"):
+        converted = extract_sections(raw)
+        if converted:
+            raw["sections"] = converted
+
+    raw["_recording_path"] = normalize_recording_url(
+        row.get("recording_path") or "", row.get("start_time")
+    )
     raw["_agent_name"] = row.get("agent_name") or row.get("agent_id") or ""
     raw["_start_time"] = str(row.get("start_time") or "")
     raw["_end_time"] = str(row.get("end_time") or "")
@@ -883,12 +906,15 @@ def client_overview(
     fatal_flag_count = sum(1 for a in audits if a.get("fatal_flag") is True)
     transcript_fatal_count = sum(1 for a in audits if a.get("_is_transcript_fatal") is True)
 
+    parameters = aggregate_parameters(audits)
+    section_keys = [p["key"] for p in parameters]
+
     sections = {}
-    for sec_name in ["opening", "communication", "probing_resolution", "process_compliance", "closure"]:
+    for sec_name in section_keys:
         sections[sec_name] = _section_avg(audits, sec_name)
 
     section_params = {}
-    for sec_name in ["opening", "communication", "probing_resolution", "process_compliance", "closure"]:
+    for sec_name in section_keys:
         section_params[sec_name] = _param_averages(audits, sec_name)
 
     complaint_audit_stats = {"total": 0, "request_raised": 0, "classification_map": {}}
@@ -911,14 +937,14 @@ def client_overview(
             if cv.get("booking_done") == "yes":
                 conversion_stats["booking_done"] += 1
 
+    # Prompt Builder prompts can return any registration status, so count the
+    # actual values instead of forcing them into three fixed buckets.
     registration_stats = {"Full Registration": 0, "Partial": 0, "Other": 0}
     for a in audits:
         re = a.get("registration_evaluation", {})
-        status = re.get("status", "Other")
-        if status in registration_stats:
-            registration_stats[status] += 1
-        else:
-            registration_stats["Other"] += 1
+        status = re.get("status") if isinstance(re, dict) else None
+        status = str(status).strip() if status else "Other"
+        registration_stats[status] = registration_stats.get(status, 0) + 1
 
     sensitive_words = []
     for a in audits:
@@ -937,6 +963,7 @@ def client_overview(
         "transcript_fatal_count": transcript_fatal_count,
         "ranking_distribution": _ranking_distribution(audits),
         "call_category_distribution": _call_category_dist(audits),
+        "parameters": parameters,
         "sections": sections,
         "section_parameters": section_params,
         "complaint_audit": complaint_audit_stats,
@@ -1212,12 +1239,17 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
         "start_time": str(data.get("start_time") or ""),
         "end_time": str(data.get("end_time") or ""),
         "created_at": str(data.get("created_at") or ""),
-        "recording_path": data.get("recording_path") or "",
-        "audio_url": data.get("recording_path") or "",
+        "recording_path": normalize_recording_url(
+            data.get("recording_path") or "", data.get("start_time")
+        ),
+        "audio_url": normalize_recording_url(
+            data.get("recording_path") or "", data.get("start_time")
+        ),
         "voice_mail": bool(data.get("voice_mail")),
         "ranking": ranking,
         "risk": risk,
         "scores": scores,
+        "parameters": aggregate_parameters([audit]) if audit else [],
         "timeline": timeline,
         "transcript": lines,
         "behaviours": behaviours,

@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal2
+from app.services.recording_url import normalize_recording_url
 from .. import data
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
@@ -19,7 +20,7 @@ def _db_row_to_call(row, agent_info=None) -> dict:
         except Exception:
             audit_json = {}
 
-    recording = row.get("recording_path") or ""
+    recording = normalize_recording_url(row.get("recording_path") or "")
     if recording and not recording.startswith("http"):
         recording = f"http://{recording}"
 
@@ -223,7 +224,7 @@ async def stream_recording(call_id: str, db: Session = Depends(get_db)):
     if not row or not row["recording_path"]:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    url = row["recording_path"].strip()
+    url = normalize_recording_url(row["recording_path"])
     if not url.startswith("http"):
         url = f"http://{url}"
 

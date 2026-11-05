@@ -566,7 +566,7 @@ function ScoreByParameterBlock({ paramData }) {
   return (
     <Card>
       <h3 className="text-[15px] font-semibold text-[#1D2433] mb-4">Score by Parameter</h3>
-      <div className="grid grid-cols-7 gap-3">
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))' }}>
         {params.map((p) => {
           const rag = RAG_COLORS[p.color] || RAG_COLORS.amber
           return (
@@ -892,7 +892,7 @@ function FilterBar({ clients, clientId, setClientId, fromDate, toDate, setFromDa
             className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5" />
         </div>
         <div className="flex items-center gap-1.5">
-          {[7, 14, 30].map((d) => (
+          {[7, 14, 30, 90].map((d) => (
             <button key={d} onClick={() => onPreset(d)}
               className="text-[10px] font-semibold px-2.5 py-1 rounded-full border border-[#E7E2D8] hover:border-[#3457D5]/40">
               {d}D

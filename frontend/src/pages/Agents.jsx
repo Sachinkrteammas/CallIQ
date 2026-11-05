@@ -4,7 +4,7 @@ import {
 } from 'recharts'
 import { Card } from '../components/shared.jsx'
 import {
-  listAgents, getAgentScoreByParameter, getAgentComparison,
+  listAgents, getAgentScoreByParameter, getAgentComparison, getAgentFullInfo,
   getAgentSubParameterDrilldown, getAgentCoaching, getAgentLeaderboard
 } from '../api/client.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
@@ -12,7 +12,7 @@ import {
   Search, RefreshCw, Trophy, TrendingUp, Lightbulb, X
 } from 'lucide-react'
 
-const PARAMS = [
+const DEFAULT_PARAMS = [
   { key: 'opening', label: 'Opening' },
   { key: 'customer_understanding', label: 'Customer Understanding' },
   { key: 'resolution_quality', label: 'Resolution Quality' },
@@ -165,7 +165,9 @@ export default function Agents() {
       )}
 
       {/* Comparison */}
-      {showComparison && comparison?.comparison?.length > 0 && (
+      {showComparison && comparison?.comparison?.length > 0 && (() => {
+        const params = comparison?.parameters?.length ? comparison.parameters : DEFAULT_PARAMS
+        return (
         <Card>
           <h3 className="text-[15px] font-semibold text-[#1D2433] mb-3">Parameter Comparison</h3>
           <div className="overflow-x-auto">
@@ -173,15 +175,15 @@ export default function Agents() {
               <thead>
                 <tr className="text-left text-[10px] text-[#6B7385] font-semibold uppercase border-b border-[#E7E2D8]">
                   <th className="py-2 pr-3">Agent</th>
-                  {PARAMS.map((p) => <th key={p.key} className="py-2 pr-2 text-center">{p.label}</th>)}
+                  {params.map((p) => <th key={p.key} className="py-2 pr-2 text-center">{p.label}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {comparison.comparison.slice(0, 15).map((row) => (
                   <tr key={row.agent_id} className="border-b border-[#E7E2D8]/70">
                     <td className="py-2 pr-3 font-semibold">{row.agent_id}</td>
-                    {PARAMS.map((p) => {
-                      const d = row.parameters[p.key] || {}
+                    {params.map((p) => {
+                      const d = row.parameters?.[p.key] || {}
                       const rag = ragOf(d.percentage || 0)
                       return (
                         <td key={p.key} className="py-2 pr-2 text-center">
@@ -195,7 +197,8 @@ export default function Agents() {
             </table>
           </div>
         </Card>
-      )}
+        )
+      })()}
 
       {/* Agents Grid */}
       <Card>
@@ -247,7 +250,7 @@ export default function Agents() {
           {agentParams && (
             <div className="mb-6">
               <h4 className="text-xs font-bold text-[#1D2433] uppercase mb-2">Score by Parameter</h4>
-              <div className="grid grid-cols-7 gap-2">
+              <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))' }}>
                 {agentParams.parameters?.map((p) => {
                   const rag = ragOf(p.percentage)
                   return (

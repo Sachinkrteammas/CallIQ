@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.services.audit_params import aggregate_parameters
 from .. import data
 
 router = APIRouter(prefix="/api/kpis", tags=["kpis"])
@@ -308,35 +309,22 @@ def score_by_parameter(
     wc = " AND ".join(where)
 
     try:
-        rows = db.execute(text(f"SELECT ca.audit_json FROM call_audits ca WHERE {wc}"), params).scalars().all()
+        rows = db.execute(
+            text(f"SELECT ca.audit_json FROM call_audits ca WHERE {wc} ORDER BY ca.created_at DESC, ca.id DESC"),
+            params,
+        ).scalars().all()
     except Exception:
         rows = []
 
-    import json
-    param_totals = {p: {"score": 0, "max": 0} for p in QUALITY_PARAMS}
-    for row in rows:
-        j = row if isinstance(row, dict) else {}
-        if isinstance(row, str):
-            try:
-                j = json.loads(row)
-            except Exception:
-                j = {}
-        sections = j.get("sections") or {}
-        for p in QUALITY_PARAMS:
-            s = sections.get(p) or {}
-            if s:
-                param_totals[p]["score"] += s.get("score", 0)
-                param_totals[p]["max"] += s.get("max_score", 0) or s.get("max", 0)
-
-    result = []
-    for p in QUALITY_PARAMS:
-        t = param_totals[p]
-        pct = round((t["score"] / t["max"]) * 100, 1) if t["max"] else 0
-        result.append({
-            "key": p, "label": PARAM_LABELS[p],
-            "percentage": pct, "color": _rag(pct),
-        })
-    return {"parameters": result}
+    parameters = aggregate_parameters(list(rows or []))
+    if not parameters:
+        # No audits in range — still return the known parameter contract so the
+        # UI renders cards instead of collapsing to an empty grid.
+        parameters = [
+            {"key": p, "label": PARAM_LABELS[p], "percentage": 0, "color": "red"}
+            for p in QUALITY_PARAMS
+        ]
+    return {"parameters": parameters}
 
 
 # ═══════════════════════════════════════════════════════════

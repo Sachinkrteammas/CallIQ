@@ -142,7 +142,7 @@ def create_prompt(payload: PromptWrite, db: Session = Depends(get_db)):
     meta = _extract_meta(cfg)
     status = payload.status or meta["status"]
 
-    db.execute(
+    result = db.execute(
         text("""
             INSERT INTO ai_prompts (client_id, name, description, version, status, prompt_json, prompt_text)
             VALUES (:client_id, :name, :description, :version, :status, :prompt_json, :prompt_text)
@@ -158,7 +158,19 @@ def create_prompt(payload: PromptWrite, db: Session = Depends(get_db)):
         },
     )
     db.commit()
-    new_id = db.execute(text("SELECT LAST_INSERT_ID() AS id")).scalar()
+    # Use the insert cursor's id: LAST_INSERT_ID() can land on a different
+    # pooled connection after commit and return 0 (which surfaced as a 404).
+    new_id = result.lastrowid
+    if not new_id:
+        row = db.execute(
+            text("""
+                SELECT id FROM ai_prompts
+                WHERE client_id = :client_id
+                ORDER BY id DESC LIMIT 1
+            """),
+            {"client_id": payload.client_id},
+        ).scalar()
+        new_id = row
     return get_prompt(new_id, db)
 
 
