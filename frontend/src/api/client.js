@@ -113,6 +113,7 @@ export const deleteAiPrompt = (id) => api.delete(`/settings/ai-prompts/${id}`).t
 
 export const listClients = () => api.get('/clients').then(r => r.data)
 export const listAllClients = () => api.get('/clients/list').then(r => r.data)
+export const listCdrSources = () => api.get('/clients/cdr-sources').then(r => r.data)
 export const getClientDetail = (id) => api.get(`/clients/detail/${id}`).then(r => r.data)
 export const createClient = (payload) => api.post('/clients', payload).then(r => r.data)
 export const updateClient = (id, payload) => api.put(`/clients/${id}`, payload).then(r => r.data)

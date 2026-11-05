@@ -7,10 +7,20 @@ from sqlalchemy.orm import Session
 from app.models.call_log import CallLog
 from app.models.client import Client
 from app.models.settings import Setting
+from app.services import cdr_service
 from app.services.recording_url import normalize_recording_url
 
 
+def _is_sales(client: Client) -> bool:
+    """Sales clients have no ingroups; service clients have at least one."""
+    return not (client.ingroups or "").strip()
+
+
 def get_asterisk_connection(client: Client):
+    if not client.db_host or not client.db_user:
+        print(f"No dialer DB configured for client {client.id}")
+        return None
+
     print("Connecting to Asterisk DB...")
     print(f"Host: {client.db_host}, User: {client.db_user}")
 
@@ -23,14 +33,18 @@ def get_asterisk_connection(client: Client):
     )
 
 
-def _fetch_dialer_payload(client: Client, settings: Setting) -> List[Dict[str, Any]]:
-    print(f"Fetching calls for client: {client.id}")
+def _fetch_legacy_dialer_payload(
+    client: Client, settings: Setting, lookback_hours: int = 1
+) -> List[Dict[str, Any]]:
+    print(f"Fetching legacy dialer calls for client: {client.id}")
 
     if not client.campaigns:
         print("No campaigns found")
         return []
 
     conn = get_asterisk_connection(client)
+    if conn is None:
+        return []
     cursor = conn.cursor()
 
     try:
@@ -69,7 +83,7 @@ def _fetch_dialer_payload(client: Client, settings: Setting) -> List[Dict[str, A
             LIMIT 200
         """
 
-        last_sync = datetime.utcnow() - timedelta(hours=1)
+        last_sync = datetime.utcnow() - timedelta(hours=max(1, int(lookback_hours)))
         cursor.execute(sql, (last_sync,))
         rows = cursor.fetchall()
 
@@ -113,7 +127,51 @@ def _fetch_dialer_payload(client: Client, settings: Setting) -> List[Dict[str, A
         print("Connection closed")
 
 
-def fetch_calls_for_client(db: Session, client: Client) -> int:
+def _fetch_dialer_payload(
+    client: Client, settings: Setting, lookback_hours: int = 1
+) -> List[Dict[str, Any]]:
+    """Fetch calls for a client from every applicable source.
+
+    Sales clients are read from the Dialdesk CDR webhook log first (that is
+    where the current sales diallers write), then optionally from the legacy
+    VICIdial tables if the client still has them configured. Service clients
+    keep the legacy-only path.
+    """
+    print(f"Fetching calls for client: {client.id} | {client.name}")
+
+    payload: List[Dict[str, Any]] = []
+
+    if _is_sales(client):
+        try:
+            payload.extend(
+                cdr_service.fetch_sales_calls(
+                    client,
+                    lookback_hours=lookback_hours,
+                    limit=200,
+                )
+            )
+        except Exception as exc:
+            print(f"[cdr] unexpected error for {client.name}: {exc}")
+
+    try:
+        payload.extend(
+            _fetch_legacy_dialer_payload(client, settings, lookback_hours)
+        )
+    except Exception as exc:
+        print(f"[dialer] legacy fetch error for {client.name}: {exc}")
+
+    seen = set()
+    deduped: List[Dict[str, Any]] = []
+    for row in payload:
+        call_id = row.get("call_id")
+        if not call_id or call_id in seen:
+            continue
+        seen.add(call_id)
+        deduped.append(row)
+    return deduped
+
+
+def fetch_calls_for_client(db: Session, client: Client, limit: int = None) -> int:
     print("\n==============================")
     print(f"START FETCH CLIENT {client.id}")
     print("==============================")
@@ -145,13 +203,22 @@ def fetch_calls_for_client(db: Session, client: Client) -> int:
         print("DAILY TARGET ALREADY COMPLETED")
         return 0
 
-    data = _fetch_dialer_payload(client, settings)
+    # Sales calls come from the webhook log; always look back far enough for
+    # the STT worker (48h) to pick them up. Service clients keep the old 1h
+    # incremental window.
+    lookback_hours = 48 if _is_sales(client) else 1
+
+    data = _fetch_dialer_payload(client, settings, lookback_hours=lookback_hours)
     print(f"Payload size: {len(data)}")
 
     from sqlalchemy.dialects.mysql import insert
     seen = set()
 
     for row in data:
+        if limit and limit > 0 and inserted >= limit:
+            print("FETCH LIMIT REACHED")
+            break
+
         agent = row["agent_id"]
 
         agent_today = today_counts.get(agent, 0)

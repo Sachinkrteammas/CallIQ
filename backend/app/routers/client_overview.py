@@ -9,6 +9,7 @@ from typing import Optional
 from ..database import get_db
 from ..services.recording_url import normalize_recording_url
 from ..services.audit_params import aggregate_parameters, extract_sections, coerce_json
+from ..services.cdr_service import known_queue_keys, list_cdr_sources, queue_key
 from .auth import get_current_user
 from fastapi import BackgroundTasks
 
@@ -303,6 +304,38 @@ def list_all_clients_full(user: dict = Depends(get_current_user), db: Session = 
         """)
         rows = db.execute(sql, {"cid": cid}).mappings().all()
     return [_client_row_to_dict(row) for row in rows]
+
+
+@clients_router.get("/cdr-sources")
+def get_cdr_sources(
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List sales queues available in the Dialdesk CDR webhook log.
+
+    Read-only helper for the Add Client form so a Sales client can be created
+    directly from a queue that already has calls in ``cdr_webhook_logs``.
+    Queues already represented by an existing client are hidden.
+    """
+    sources = list_cdr_sources()
+    if not sources:
+        return []
+
+    known = known_queue_keys()
+    try:
+        rows = db.execute(
+            text("SELECT name, campaigns, ingroups FROM clients")
+        ).mappings().all()
+        for row in rows:
+            for value in (row.get("name"), row.get("campaigns"), row.get("ingroups")):
+                for token in str(value or "").split(","):
+                    key = queue_key(token)
+                    if key:
+                        known.add(key)
+    except Exception:
+        pass
+
+    return [s for s in sources if queue_key(s.get("queue_name")) not in known]
 
 
 @clients_router.get("/detail/{client_id}")

@@ -21,7 +21,9 @@ def _ist_now() -> datetime:
     return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 
-def run_once(limit: int = 20, max_age_hours: int = 48) -> int:
+def run_once(
+    limit: int = 20, max_age_hours: int = 48, client_id: int = None
+) -> int:
     db = SessionLocal()
     try:
         stmt = (
@@ -30,6 +32,9 @@ def run_once(limit: int = 20, max_age_hours: int = 48) -> int:
             .order_by(CallLog.start_time.desc())
             .limit(limit)
         )
+
+        if client_id:
+            stmt = stmt.where(CallLog.client_id == client_id)
 
         # Old recordings are purged from the dialer, so never pick them up.
         if max_age_hours > 0:
@@ -113,15 +118,29 @@ def main() -> None:
         default=48,
         help="Skip calls older than this (recordings get purged). 0 = no limit.",
     )
+    parser.add_argument(
+        "--client-id",
+        type=int,
+        default=None,
+        help="Only transcribe calls for this client id.",
+    )
     args = parser.parse_args()
 
     if args.once:
-        run_once(limit=args.limit, max_age_hours=args.max_age_hours)
+        run_once(
+            limit=args.limit,
+            max_age_hours=args.max_age_hours,
+            client_id=args.client_id,
+        )
         return
 
     while True:
         try:
-            run_once(limit=args.limit, max_age_hours=args.max_age_hours)
+            run_once(
+                limit=args.limit,
+                max_age_hours=args.max_age_hours,
+                client_id=args.client_id,
+            )
         except Exception as exc:
             print(f"[stt_worker] error: {exc}")
         time.sleep(max(1, args.interval))

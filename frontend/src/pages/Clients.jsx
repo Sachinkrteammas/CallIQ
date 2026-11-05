@@ -4,7 +4,7 @@ import { useAuth } from '../components/AuthContext.jsx'
 import { useClientFilter } from '../components/ClientContext.jsx'
 import {
   listAllClients, getClientDetail, createClient, updateClient,
-  deleteClient, toggleClientStatus
+  deleteClient, toggleClientStatus, listCdrSources
 } from '../api/client.js'
 import {
   Plus, Search, Eye, Edit3, Trash2, ToggleLeft, ToggleRight,
@@ -38,6 +38,8 @@ export default function Clients() {
   const [form, setForm] = useState({ ...EMPTY_FORM })
   const [editId, setEditId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [cdrSources, setCdrSources] = useState([])
+  const [cdrLoading, setCdrLoading] = useState(false)
 
   const [showView, setShowView] = useState(false)
   const [viewClient, setViewClient] = useState(null)
@@ -88,6 +90,23 @@ export default function Clients() {
     setEditId(null)
     setModalMode('add')
     setShowModal(true)
+    setCdrLoading(true)
+    listCdrSources()
+      .then(data => setCdrSources(data || []))
+      .catch(() => setCdrSources([]))
+      .finally(() => setCdrLoading(false))
+  }
+
+  const pickCdrSource = (queueName) => {
+    const queue = (queueName || '').trim()
+    if (!queue) return
+    const prettyName = queue.replace(/\s+/g, ' ')
+    setForm(f => ({
+      ...f,
+      name: prettyName,
+      campaigns: queue,
+      ingroups: '',
+    }))
   }
 
   const openEdit = (client) => {
@@ -370,6 +389,33 @@ export default function Clients() {
             </div>
 
             <div className="px-6 py-5 space-y-4">
+              {modalMode === 'add' && globalClientType !== 'Service' && (
+                <div className="rounded-xl border border-[#E7E2D8] bg-[#F7F4EE] p-4">
+                  <h3 className="text-xs font-semibold text-[#6B7385] uppercase tracking-wider mb-2">
+                    Import from CDR webhook (Sales)
+                  </h3>
+                  <p className="text-xs text-[#6B7385] mb-3">
+                    Pick a queue from <span className="font-mono">cdr_webhook_logs</span> to auto-fill the
+                    client. Calls from this queue are fetched and audited automatically.
+                  </p>
+                  <label className="block text-xs font-semibold text-[#1D2433] mb-1">CDR Queue</label>
+                  <select
+                    defaultValue=""
+                    onChange={(e) => pickCdrSource(e.target.value)}
+                    disabled={cdrLoading}
+                    className="w-full px-3 py-2 text-sm rounded-xl bg-white border border-[#E7E2D8] text-[#1D2433] focus:outline-none focus:ring-2 focus:ring-[#3457D5]/30 transition disabled:opacity-60"
+                  >
+                    <option value="">
+                      {cdrLoading ? 'Loading queues...' : `Select a queue (${cdrSources.length})`}
+                    </option>
+                    {cdrSources.map((source) => (
+                      <option key={source.queue_name} value={source.queue_name}>
+                        {source.queue_name} — {source.calls} calls
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <InputField label="Name *" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Client name" />
                 <InputField label="Email" value={form.email} onChange={v => setForm(f => ({ ...f, email: v }))} placeholder="Email address" type="email" />
