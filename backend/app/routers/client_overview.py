@@ -1239,16 +1239,31 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
         audit = raw_audit
 
     percentage = data.get("percentage")
+    raw_audit = data.get("audit_json")
+    has_audit = any(data.get(k) is not None for k in ("total_score", "percentage", "ranking")) or bool(raw_audit)
+
     if percentage is not None:
         overall = round(float(percentage), 1)
-    else:
+    elif data.get("total_score") is not None:
         overall = round(float(data.get("total_score") or 0), 1)
+    else:
+        overall = None
 
-    ranking = data.get("ranking") or "Unknown"
-    risk = _risk_level(data.get("fatal_flag"), ranking, percentage, data.get("total_score"))
-    scores = _build_scores(audit, overall)
+    ranking = data.get("ranking") if has_audit else "Pending"
+    risk = _risk_level(data.get("fatal_flag"), ranking, percentage, data.get("total_score")) if has_audit else "Pending"
+    scores = _build_scores(audit, overall if overall is not None else 0) if has_audit else {
+        "overall": None,
+        "professionalism": None,
+        "empathy": None,
+        "listening": None,
+        "confidence": None,
+        "compliance": None,
+        "patience": None,
+        "resolution": None,
+        "control": None,
+    }
     timeline = _derive_timeline(lines, duration)
-    behaviours = _derive_behaviours(lines)
+    behaviours = _derive_behaviours(lines) if has_audit else []
 
     client_name = None
     if data.get("client_id"):
@@ -1279,14 +1294,20 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
             data.get("recording_path") or "", data.get("start_time")
         ),
         "voice_mail": bool(data.get("voice_mail")),
+        "has_audit": has_audit,
+        "audit_pending": not has_audit,
         "ranking": ranking,
         "risk": risk,
         "scores": scores,
-        "parameters": aggregate_parameters([audit]) if audit else [],
+        "parameters": aggregate_parameters([audit]) if (audit and has_audit) else [],
         "timeline": timeline,
         "transcript": lines,
         "behaviours": behaviours,
-        "coaching": _coaching_recommendation(risk),
+        "coaching": _coaching_recommendation(risk) if has_audit else {
+            "status": "Pending Audit",
+            "recommendation": "This call has not been audited yet. Run STT and audit workers (or ensure an Active prompt is configured) to generate AI scores.",
+            "estimated_improvement": "—",
+        },
     }
 
 # ═══════════════════════════════════════════════════════════════════════════

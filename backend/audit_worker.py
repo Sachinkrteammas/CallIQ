@@ -185,9 +185,10 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
         calls = db.scalars(query.order_by(CallLog.call_id.desc()).limit(limit)).all()
 
         mode = "re-audit" if reaudit else "unaudited"
-        print(f"[audit_worker] Found {len(calls)} {mode} non-voicemail calls")
+        print(f"[audit_worker] Found {len(calls)} {mode} eligible calls (has transcript, not voicemail/placeholder)")
         processed = 0
         skipped = 0
+        skip_reasons = {"no_prompt": 0, "empty": 0, "error": 0}
 
         for call in calls:
             prompt_text, prompt_config = _load_prompt(db, call.client_id)
@@ -195,6 +196,7 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
             if not prompt_text:
                 print(f"[audit_worker] SKIP no active prompt for client_id={call.client_id}, call={call.call_id}")
                 skipped += 1
+                skip_reasons["no_prompt"] += 1
                 continue
 
             try:
@@ -209,10 +211,12 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
                 if not audit_json:
                     print(f"[audit_worker] WARN empty audit_json for {call.call_id}")
                     skipped += 1
+                    skip_reasons["empty"] += 1
                     continue
             except Exception as exc:
                 print(f"[audit_worker] FAIL {call.call_id}: {exc}")
                 skipped += 1
+                skip_reasons["error"] += 1
                 continue
 
             existing = db.scalar(
@@ -257,7 +261,9 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
             processed += 1
 
         db.commit()
-        print(f"[audit_worker] Done. Processed={processed}, Skipped={skipped}")
+        print(f"[audit_worker] Done. Processed={processed}, Skipped={skipped} {skip_reasons}")
+        if processed == 0 and len(calls) == 0:
+            print("[audit_worker] Hint: calls need non-empty transcript (not [NO_SPEECH]/[RECORDING_MISSING]/[TRANSCRIPT_FAILED]), voice_mail=False, and an Active prompt for the client.")
         return processed
     finally:
         db.close()

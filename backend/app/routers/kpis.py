@@ -1,4 +1,4 @@
-import random
+﻿import random
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Query, Depends
@@ -13,12 +13,12 @@ router = APIRouter(prefix="/api/kpis", tags=["kpis"])
 
 _MIGRATION_DONE = False
 
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # QUALITY BAND THRESHOLDS (client confirm kar sakta hai)
-# ═══════════════════════════════════════════════════════════
-BQ_MAX = 60    # < 60% → Bottom Quality
-TQ_MIN = 80    # >= 80% → Top Quality
-# 60-79% → Medium Quality
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+BQ_MAX = 89    # < 89% -> Bottom Quality (Needs Improvement)
+TQ_MIN = 94    # >= 94% -> Top Quality (Excellent)
+# 89-93% -> Medium Quality (Meets Expectations)
 
 QUALITY_PARAMS = [
     "opening", "customer_understanding", "resolution_quality",
@@ -83,15 +83,16 @@ def _rag(pct):
     return "red"
 
 
-# ═══════════════════════════════════════════════════════════
-# QUALITY BANDS (BQ / MQ / TQ) — NEW ENDPOINT
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# QUALITY BANDS (BQ / MQ / TQ) â€” NEW ENDPOINT
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/quality-bands")
 def quality_bands(
     client_id: Optional[int] = None,
     advisor_id: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     bq_max: int = BQ_MAX,
     tq_min: int = TQ_MIN,
     db: Session = Depends(get_db),
@@ -109,6 +110,9 @@ def quality_bands(
     if client_id:
         where.append("ca.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if advisor_id:
         where.append("ca.agent_id = :advisor_id")
         params["advisor_id"] = advisor_id
@@ -151,6 +155,9 @@ def quality_bands(
     if client_id:
         agent_where.append("ca.client_id = :client_id")
         agent_params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        agent_where.append(f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if from_date:
         agent_where.append("ca.created_at >= :from_date")
         agent_params["from_date"] = from_date
@@ -181,7 +188,7 @@ def quality_bands(
     agents = []
     for r in agent_rows:
         avg = float(r["avg_pct"] or 0)
-        # Agent ka band — based on avg %
+        # Agent ka band â€” based on avg %
         if avg < bq_max:
             agent_band = "BQ"
         elif avg >= tq_min:
@@ -222,25 +229,29 @@ def _quality_bands_mock(bq_max, tq_min):
     }
 
 
-# ═══════════════════════════════════════════════════════════
-# OVERVIEW — FCR, Fatal, Avg Score
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# OVERVIEW â€” FCR, Fatal, Avg Score
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/overview")
 def overview(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     _ensure_audit_columns(db)
-    if not _db_has_audits(db, client_id):
-        return _overview_mock()
 
     where = ["1=1"]
     params = {}
     if client_id:
         where.append("ca.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(
+            f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)"
+        )
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
@@ -284,14 +295,15 @@ def _overview_mock():
     ], "ai_metrics": []}
 
 
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # SCORE BY PARAMETER
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/score-by-parameter")
 def score_by_parameter(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     _ensure_audit_columns(db)
@@ -300,6 +312,9 @@ def score_by_parameter(
     if client_id:
         where.append("ca.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
@@ -318,7 +333,7 @@ def score_by_parameter(
 
     parameters = aggregate_parameters(list(rows or []))
     if not parameters:
-        # No audits in range — still return the known parameter contract so the
+        # No audits in range â€” still return the known parameter contract so the
         # UI renders cards instead of collapsing to an empty grid.
         parameters = [
             {"key": p, "label": PARAM_LABELS[p], "percentage": 0, "color": "red"}
@@ -327,14 +342,15 @@ def score_by_parameter(
     return {"parameters": parameters}
 
 
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # AGENT LEADERBOARD
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/agent-leaderboard")
 def agent_leaderboard(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     limit: int = 10,
     db: Session = Depends(get_db),
 ):
@@ -344,6 +360,9 @@ def agent_leaderboard(
     if client_id:
         where.append("ca.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
@@ -391,14 +410,15 @@ def agent_leaderboard(
     return {"leaderboard": leaderboard}
 
 
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # TRENDS
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/trends")
 def trends(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     _ensure_audit_columns(db)
@@ -407,6 +427,9 @@ def trends(
     if client_id:
         where.append("ca.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
@@ -440,18 +463,20 @@ def trends(
     return {"series": series}
 
 
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # SALES CATEGORIZATION (only Genuine + Invalid)
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/sales-categorization")
 def sales_categorization(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     _ensure_audit_columns(db)
-    if not _db_has_audits(db, client_id):
+    # Sales categorization is only relevant for Sales clients/context
+    if client_type and client_type.lower() == "service":
         return _sales_mock()
 
     where = ["1=1"]
@@ -459,6 +484,9 @@ def sales_categorization(
     if client_id:
         where.append("ca.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
@@ -531,14 +559,15 @@ def _sales_mock():
     }
 
 
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # CALL DURATION
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/call-duration-categories")
 def call_duration_categories(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     short_max: int = 120,
     medium_max: int = 600,
     db: Session = Depends(get_db),
@@ -548,6 +577,9 @@ def call_duration_categories(
     if client_id:
         where.append("cl.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"cl.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if from_date:
         where.append("cl.start_time >= :from_date")
         params["from_date"] = from_date
@@ -577,14 +609,15 @@ def call_duration_categories(
     }
 
 
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # MONTHLY SUMMARY
-# ═══════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @router.get("/monthly-audit-summary")
 def monthly_audit_summary(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     _ensure_audit_columns(db)
@@ -604,6 +637,9 @@ def monthly_audit_summary(
     if client_id:
         where.append("ca.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"ca.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
 
     wc = " AND ".join(where)
 

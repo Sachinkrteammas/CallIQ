@@ -1,4 +1,4 @@
-import axios from 'axios'
+﻿import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -38,16 +38,16 @@ export const getHealthScore = () => api.get('/kpis/health-score').then(r => r.da
 export const getInsights = () => api.get('/kpis/insights').then(r => r.data)
 export const getTrend = () => api.get('/kpis/trend').then(r => r.data)
 
-export const getDistribution = () => api.get('/conversation/distribution').then(r => r.data)
+export const getDistribution = (params = {}) => api.get('/conversation/distribution', { params }).then(r => r.data)
 export const getHeatmap = () => api.get('/conversation/heatmap').then(r => r.data)
-export const getFindings = () => api.get('/conversation/findings').then(r => r.data)
+export const getFindings = (params = {}) => api.get('/conversation/findings', { params }).then(r => r.data)
 
 export const listCalls = (params = {}) => api.get('/calls', { params }).then(r => r.data)
 export const getCall = (id) => api.get(`/calls/${id}`).then(r => r.data)
 export const getCallDetail = (callId) => api.get(`/client/call/${callId}`).then(r => r.data)
 export const getCallRecordingUrl = (callId) => `/api/calls/${callId}/recording`
 
-// ═══ AGENTS ═══
+// â•â•â• AGENTS â•â•â•
 export const listAgents = (params = {}) => api.get('/agents', { params }).then(r => r.data)
 export const getAgent = (id) => api.get(`/agents/${id}`).then(r => r.data)
 export const getAgentList = (params = {}) => api.get('/agents/list', { params }).then(r => r.data)
@@ -146,6 +146,37 @@ export const getCallVADMetrics = (callId) => api.get(`/client/call/${callId}/vad
 export const getClientVADTrend = (clientId, fromDate, toDate, clientType) =>
   api.get(`/client/${clientId}/vad-trend`, { params: { from_date: fromDate, to_date: toDate, client_type: clientType } }).then(r => r.data)
 
+const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
+
+const filenameFromDisposition = (disposition, fallback) => {
+  if (!disposition) return fallback
+  const m = /filename="?([^";]+)"?/i.exec(disposition)
+  return m ? m[1] : fallback
+}
+
+export const exportClientWiseReport = (params = {}) =>
+  api.get('/reports/client-wise/export', { params, responseType: 'blob' }).then(r => {
+    downloadBlob(r.data, filenameFromDisposition(r.headers['content-disposition'], 'client_wise.csv'))
+  })
+
+export const exportAgentWiseReport = (params = {}) =>
+  api.get('/reports/agent-wise/export', { params, responseType: 'blob' }).then(r => {
+    downloadBlob(r.data, filenameFromDisposition(r.headers['content-disposition'], 'agent_wise.csv'))
+  })
+
+export const exportAuditsReport = (params = {}) =>
+  api.get('/reports/audits/export', { params, responseType: 'blob' }).then(r => {
+    downloadBlob(r.data, filenameFromDisposition(r.headers['content-disposition'], 'audits_export.csv'))
+  })
 export const getClientSettings = async (clientId) => {
   try {
     const res = await api.get(`/client-settings/${clientId}`)

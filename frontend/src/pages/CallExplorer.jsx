@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+﻿import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, SeverityBadge, EmptyState } from '../components/shared.jsx'
 import { listCalls } from '../api/client.js'
@@ -30,12 +30,14 @@ const saleCategoryColor = {
   Genuine: 'bg-[#E7F7EF] text-[#1C9A6C]',
   Invalid: 'bg-[#FBE9E9] text-[#D14343]',
   Unknown: 'bg-[#F0EDE4] text-[#6B7385]',
+  Pending: 'bg-[#F0EDE4] text-[#6B7385]',
 }
 
 const bandColor = {
   TQ: 'bg-[#E7F7EF] text-[#1C9A6C]',
   MQ: 'bg-[#FCF1DF] text-[#C9862B]',
   BQ: 'bg-[#FBE9E9] text-[#D14343]',
+  Pending: 'bg-[#F0EDE4] text-[#6B7385]',
 }
 
 
@@ -64,7 +66,7 @@ export default function CallExplorer() {
   const [customerConfirmation, setCustomerConfirmation] = useState('')
   const [orderInformation, setOrderInformation] = useState('')
 
-  // ═══ Sync URL params when they change ═══
+  // â•â•â• Sync URL params when they change â•â•â•
   useEffect(() => {
     const bandFromUrl = searchParams.get('band')
     const agentFromUrl = searchParams.get('agent_id')
@@ -116,8 +118,9 @@ export default function CallExplorer() {
 
   const sorted = [...calls].sort((a, b) => {
     const dir = sortDir === 'asc' ? 1 : -1
-    if (sortKey === 'score') return ((a.total_score || 0) - (b.total_score || 0)) * dir
-    if (sortKey === 'percentage') return ((a.percentage || 0) - (b.percentage || 0)) * dir
+    const num = (v) => (v === null || v === undefined || v === '' ? -1 : Number(v) || 0)
+    if (sortKey === 'score') return (num(a.total_score) - num(b.total_score)) * dir
+    if (sortKey === 'percentage') return (num(a.percentage) - num(b.percentage)) * dir
     if (sortKey === 'duration') return (((a._duration ?? 0) || 0) - ((b._duration ?? 0) || 0)) * dir
     if (sortKey === 'date') return ((a._created_at || '') > (b._created_at || '') ? 1 : -1) * dir
     return 0
@@ -157,8 +160,11 @@ export default function CallExplorer() {
   }
 
   const getBand = (pct) => {
-    if (pct >= 80) return 'TQ'
-    if (pct >= 60) return 'MQ'
+    if (pct === null || pct === undefined || pct === '') return 'Pending'
+    const n = Number(pct)
+    if (Number.isNaN(n)) return 'Pending'
+    if (n >= 94) return 'TQ'
+    if (n >= 89) return 'MQ'
     return 'BQ'
   }
 
@@ -168,7 +174,7 @@ export default function CallExplorer() {
         <div>
           <h1 className="text-xl font-bold text-[#1D2433]">Call Explorer</h1>
           <p className="text-xs text-[#6B7385] mt-0.5">
-            {isAllClients ? 'All Clients' : selectedClient ? selectedClient.name : 'No client selected'} · {fromDate} to {toDate}
+            {isAllClients ? 'All Clients' : selectedClient ? selectedClient.name : 'No client selected'} Â· {fromDate} to {toDate}
           </p>
         </div>
         <span className="text-xs text-[#6B7385] font-medium">{total} calls found</span>
@@ -243,9 +249,9 @@ export default function CallExplorer() {
               className="text-xs border border-[#E7E2D8] rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:border-[#3457D5]"
             >
               <option value="">All Bands</option>
-              <option value="TQ">TQ (≥80%)</option>
-              <option value="MQ">MQ (60-79%)</option>
-              <option value="BQ">BQ (&lt;60%)</option>
+              <option value="TQ">TQ (94-100%)</option>
+              <option value="MQ">MQ (89-93%)</option>
+              <option value="BQ">BQ (&lt;89%)</option>
             </select>
           </div>
 
@@ -369,8 +375,12 @@ export default function CallExplorer() {
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((c, i) => {
-                  const band = getBand(c.percentage || 0)
+                                  {sorted.map((c, i) => {
+                  const audited = c.has_audit !== false && c.percentage !== null && c.percentage !== undefined
+                  const pct = audited ? Number(c.percentage) : null
+                  const band = getBand(pct)
+                  const ranking = audited ? (c.ranking || '—') : 'Pending'
+                  const barColor = pct === null ? '#D9D4C8' : (pct >= 94 ? '#1C9A6C' : pct >= 89 ? '#C9862B' : '#D14343')
                   return (
                     <tr
                       key={c._call_id || c._id || i}
@@ -386,47 +396,23 @@ export default function CallExplorer() {
                       <td className="py-2.5 pr-3">
                         <div className="flex items-center gap-2">
                           <div className="w-12 h-1.5 rounded-full bg-[#F0EDE4] overflow-hidden">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: `${c.percentage || 0}%`,
-                                background: (c.percentage || 0) >= 80 ? '#1C9A6C' : (c.percentage || 0) >= 60 ? '#C9862B' : '#D14343',
-                              }}
-                            />
+                            <div className="h-full rounded-full" style={{ width: `${pct ?? 0}%`, background: barColor }} />
                           </div>
-                          <span className="text-xs font-semibold">{c.percentage || 0}%</span>
+                          <span className="text-xs font-semibold">{pct === null ? '—' : `${pct}%`}</span>
                         </div>
                       </td>
                       <td className="py-2.5 pr-3">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${bandColor[band]}`}>
-                          {band}
-                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${bandColor[band] || 'bg-[#F0EDE4] text-[#6B7385]'}`}>{band}</span>
                       </td>
                       <td className="py-2.5 pr-3">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${rankingColor[c.ranking] || 'bg-gray-100 text-gray-600'}`}>
-                          {c.ranking || '—'}
-                        </span>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${rankingColor[ranking] || bandColor[ranking] || 'bg-[#F0EDE4] text-[#6B7385]'}`}>{ranking}</span>
                       </td>
-                      <td className="py-2.5 pr-3">
-                        {c.fatal_flag ? (
-                          <span className="text-[10px] font-bold text-[#D14343] bg-[#FBE9E9] px-2 py-0.5 rounded-full">Fatal</span>
-                        ) : (
-                          <span className="text-[10px] font-medium text-[#6B7385]">—</span>
-                        )}
-                      </td>
-                      <td className="py-2.5 pr-3">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${saleCategoryColor[c.sale_category] || 'bg-gray-100 text-gray-600'}`}>
-                          {c.sale_category || 'Unknown'}
-                        </span>
-                      </td>
-                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.invalid_reason || '—'}</td>
-                      <td className="py-2.5 pr-3">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${c.crm_sale_done ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#F0EDE4] text-[#6B7385]'}`}>
-                          {c.crm_sale_done ? 'Done' : 'Not Done'}
-                        </span>
-                      </td>
-                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.customer_confirmation || '—'}</td>
-                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{c.order_information || '—'}</td>
+                      <td className="py-2.5 pr-3">{audited && c.fatal_flag ? (<span className="text-[10px] font-bold text-[#D14343] bg-[#FBE9E9] px-2 py-0.5 rounded-full">Fatal</span>) : (<span className="text-[10px] font-medium text-[#6B7385]">—</span>)}</td>
+                      <td className="py-2.5 pr-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${saleCategoryColor[audited ? c.sale_category : 'Pending'] || 'bg-[#F0EDE4] text-[#6B7385]'}`}>{audited ? (c.sale_category || 'Unknown') : 'Pending'}</span></td>
+                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{audited ? (c.invalid_reason || '—') : '—'}</td>
+                      <td className="py-2.5 pr-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${audited && c.crm_sale_done ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#F0EDE4] text-[#6B7385]'}`}>{audited && c.crm_sale_done ? 'Done' : (audited ? 'Not Done' : 'Pending')}</span></td>
+                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{audited ? (c.customer_confirmation || '—') : 'Pending'}</td>
+                      <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{audited ? (c.order_information || '—') : 'Pending'}</td>
                     </tr>
                   )
                 })}

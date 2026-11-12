@@ -67,6 +67,10 @@ export default function Clients() {
     }
   }, [])
 
+  const notifyClientsRefresh = () => {
+    try { window.dispatchEvent(new Event('clients:refresh')) } catch {}
+  }
+
   useEffect(() => { fetchClients() }, [fetchClients])
 
   const typeOf = (c) => {
@@ -157,6 +161,7 @@ export default function Clients() {
       }
       setShowModal(false)
       fetchClients()
+      notifyClientsRefresh()
     } catch (err) {
       showToast(err.response?.data?.detail || 'Failed to save client', 'error')
     } finally {
@@ -169,6 +174,7 @@ export default function Clients() {
       await toggleClientStatus(client.id)
       showToast(`Client ${client.is_active ? 'deactivated' : 'activated'}`)
       fetchClients()
+      notifyClientsRefresh()
     } catch {
       showToast('Failed to update status', 'error')
     }
@@ -182,6 +188,7 @@ export default function Clients() {
       showToast('Client deleted successfully')
       setConfirmDelete(null)
       fetchClients()
+      notifyClientsRefresh()
     } catch {
       showToast('Failed to delete client', 'error')
     } finally {

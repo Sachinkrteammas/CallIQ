@@ -1,4 +1,5 @@
 import json
+import threading
 from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -220,6 +221,29 @@ def update_prompt(prompt_id: int, payload: PromptWrite, db: Session = Depends(ge
     return get_prompt(prompt_id, db)
 
 
+def _run_pipeline_for_client(client_id: int, max_calls: int = 10):
+    """Best-effort pipeline after prompt activation: fetch -> STT -> audit.
+    Capped to max_calls to avoid unexpected cost."""
+    try:
+        import fetch_worker, stt_worker, audit_worker
+        # fetch new calls (best-effort), then process only a small batch
+        try:
+            fetch_worker.run_once(client_id=client_id, limit=max_calls)
+        except Exception as e:
+            print(f"[pipeline] fetch failed for client {client_id}: {e}")
+        try:
+            stt_worker.run_once(limit=max_calls, client_id=client_id)
+        except Exception as e:
+            print(f"[pipeline] stt failed for client {client_id}: {e}")
+        try:
+            audit_worker.run_once(limit=max_calls, client_id=client_id)
+        except Exception as e:
+            print(f"[pipeline] audit failed for client {client_id}: {e}")
+        print(f"[pipeline] completed for client {client_id} (cap={max_calls})")
+    except Exception as e:
+        print(f"[pipeline] unexpected error for client {client_id}: {e}")
+
+
 @router.post("/{prompt_id}/activate")
 def activate_prompt(prompt_id: int, db: Session = Depends(get_db)):
     _ensure_table(db)
@@ -229,13 +253,14 @@ def activate_prompt(prompt_id: int, db: Session = Depends(get_db)):
     if not existing:
         raise HTTPException(status_code=404, detail="Prompt not found")
 
+    client_id = existing["client_id"]
     db.execute(
         text("""
             UPDATE ai_prompts
             SET status = 'Archived', updated_at = CURRENT_TIMESTAMP
             WHERE client_id = :client_id AND status = 'Active'
         """),
-        {"client_id": existing["client_id"]},
+        {"client_id": client_id},
     )
     db.execute(
         text("""
@@ -246,6 +271,11 @@ def activate_prompt(prompt_id: int, db: Session = Depends(get_db)):
         {"id": prompt_id},
     )
     db.commit()
+
+    # Auto-run pipeline in background with safe cap (5-10 calls) to avoid cost
+    if client_id is not None:
+        threading.Thread(target=_run_pipeline_for_client, args=(int(client_id), 10), daemon=True).start()
+
     return get_prompt(prompt_id, db)
 
 

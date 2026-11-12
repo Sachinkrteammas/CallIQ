@@ -32,8 +32,20 @@ export function ClientProvider({ children }) {
   const [fromDate, setFromDate] = useState(() => getDateRange(90).from)
   const [toDate, setToDate] = useState(() => getDateRange(90).to)
 
+  const refreshClients = useCallback(async () => {
+    try {
+      const res = await listClients()
+      const typed = (res || []).map((c) => ({ ...c, type: resolveType(c) }))
+      setAllClients(typed)
+      if (isClientUser && userClientId) setClientId(Number(userClientId))
+    } catch {
+      setAllClients([])
+    }
+  }, [isClientUser, userClientId])
+
   useEffect(() => {
     let cancelled = false
+    setLoading(true)
     listClients()
       .then((res) => {
         if (cancelled) return
@@ -47,8 +59,13 @@ export function ClientProvider({ children }) {
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-    return () => { cancelled = true }
-  }, [isClientUser, userClientId])
+    const onRefresh = () => { if (!cancelled) refreshClients() }
+    window.addEventListener('clients:refresh', onRefresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('clients:refresh', onRefresh)
+    }
+  }, [isClientUser, userClientId, refreshClients])
 
   const clients = allClients.filter((c) => !clientType || c.type === clientType)
 
@@ -78,6 +95,7 @@ export function ClientProvider({ children }) {
         toDate,
         setFromDate,
         setToDate,
+        refreshClients,
       }}
     >
       {children}

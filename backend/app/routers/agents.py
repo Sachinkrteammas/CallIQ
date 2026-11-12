@@ -40,6 +40,8 @@ class CoachingUpdate(BaseModel):
     estimated_improvement: Optional[str] = None
     reason: Optional[str] = None
     team: Optional[str] = None
+    resolution_remarks: Optional[str] = None
+    resolved_by: Optional[str] = None
 
 
 class CoachingCreate(BaseModel):
@@ -246,10 +248,23 @@ def _ensure_coaching_table(db: Session = None):
                 evidence TEXT,
                 score_at_flag DECIMAL(5,1) DEFAULT NULL,
                 reason VARCHAR(255) DEFAULT NULL,
+                resolution_remarks TEXT NULL,
+                resolved_by VARCHAR(255) NULL,
+                resolved_at TIMESTAMP NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """))
+        # Add missing columns for existing DBs
+        for col, ddl in [
+            ("resolution_remarks", "ALTER TABLE coaching_queue ADD COLUMN resolution_remarks TEXT NULL"),
+            ("resolved_by", "ALTER TABLE coaching_queue ADD COLUMN resolved_by VARCHAR(255) NULL"),
+            ("resolved_at", "ALTER TABLE coaching_queue ADD COLUMN resolved_at TIMESTAMP NULL"),
+        ]:
+            try:
+                db.execute(text(ddl))
+            except Exception:
+                pass
         db.commit()
     except Exception as exc:
         print(f"[coaching] ensure table failed: {exc}")
@@ -257,18 +272,22 @@ def _ensure_coaching_table(db: Session = None):
 
 def _coaching_row_to_item(row) -> dict:
     m = row._mapping if hasattr(row, "_mapping") else row
-    score = m["score_at_flag"]
+    score = m.get("score_at_flag") if hasattr(m, "get") else m["score_at_flag"]
+    resolved_at = m.get("resolved_at") if hasattr(m, "get") else None
     return {
         "id": m["id"],
         "agent_id": m["agent_id"],
         "agent_name": m["agent_name"],
-        "team": m["team"] or "General",
-        "status": m["status"] or "Needs Coaching",
-        "recommendation": m["recommendation"] or "",
-        "estimated_improvement": m["estimated_improvement"] or "",
-        "evidence": m["evidence"],
+        "team": m.get("team") or "General",
+        "status": m.get("status") or "Needs Coaching",
+        "recommendation": m.get("recommendation") or "",
+        "estimated_improvement": m.get("estimated_improvement") or "",
+        "evidence": m.get("evidence"),
         "score_at_flag": float(score) if score is not None else None,
-        "reason": m["reason"] or "",
+        "reason": m.get("reason") or "",
+        "resolution_remarks": m.get("resolution_remarks") or "",
+        "resolved_by": m.get("resolved_by") or "",
+        "resolved_at": str(resolved_at) if resolved_at else None,
     }
 
 
@@ -276,7 +295,8 @@ def _coaching_items_from_db(db: Session, client_id: Optional[int] = None) -> lis
     _ensure_coaching_table(db)
     rows = db.execute(text("""
         SELECT id, agent_id, agent_name, team, status, recommendation,
-               estimated_improvement, evidence, score_at_flag, reason
+               estimated_improvement, evidence, score_at_flag, reason,
+               resolution_remarks, resolved_by, resolved_at
         FROM coaching_queue
         ORDER BY updated_at DESC, id DESC
     """)).mappings().all()
@@ -339,7 +359,8 @@ def create_coaching_item(payload: CoachingCreate, db: Session = Depends(get_db))
     item_id = result.lastrowid
     row = db.execute(text("""
         SELECT id, agent_id, agent_name, team, status, recommendation,
-               estimated_improvement, evidence, score_at_flag, reason
+               estimated_improvement, evidence, score_at_flag, reason,
+               resolution_remarks, resolved_by, resolved_at
         FROM coaching_queue WHERE id = :id
     """), {"id": item_id}).mappings().one()
     return _coaching_row_to_item(row)
@@ -397,8 +418,14 @@ def auto_flag_coaching(
 def update_coaching_item(item_id: str, payload: CoachingUpdate, db: Session = Depends(get_db)):
     _ensure_coaching_table(db)
     updates = {k: v for k, v in payload.dict(exclude_unset=True).items() if v is not None}
+    if updates.get("status") == "Completed":
+        # Auto-stamp resolution time if not already set
+        updates.setdefault("resolved_at", None)
     if updates:
-        set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+        set_parts = [f"{k} = :{k}" for k in updates]
+        if updates.get("status") == "Completed":
+            set_parts.append("resolved_at = COALESCE(resolved_at, NOW())")
+        set_clause = ", ".join(set_parts)
         updates["item_id"] = item_id
         db.execute(
             text(f"UPDATE coaching_queue SET {set_clause}, updated_at = NOW() WHERE id = :item_id"),
@@ -408,7 +435,8 @@ def update_coaching_item(item_id: str, payload: CoachingUpdate, db: Session = De
 
     row = db.execute(text("""
         SELECT id, agent_id, agent_name, team, status, recommendation,
-               estimated_improvement, evidence, score_at_flag, reason
+               estimated_improvement, evidence, score_at_flag, reason,
+               resolution_remarks, resolved_by, resolved_at
         FROM coaching_queue WHERE id = :id
     """), {"id": item_id}).mappings().one_or_none()
     if not row:
@@ -734,7 +762,7 @@ def agent_full_info(agent_id: str, db: Session = Depends(get_db)):
 
     total = int(stats["total"] or 0)
     avg_pct = float(stats["avg_pct"] or 0)
-    band = "TQ" if avg_pct >= 80 else "BQ" if avg_pct < 60 else "MQ"
+    band = "TQ" if avg_pct >= 94 else "BQ" if avg_pct < 89 else "MQ"
 
     return {
         "agent_id": agent_id,

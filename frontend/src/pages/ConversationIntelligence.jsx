@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Card, SectionTitle, Sparkline, Trend, SeverityBadge, EmptyState } from '../components/shared.jsx'
 import { DISTRIBUTION, HEATMAP, AI_FINDINGS, TREND_DATA } from '../data/mock.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
-import { getClientVADMetrics, triggerVADProcessing } from '../api/client.js'
+import { getClientVADMetrics, triggerVADProcessing, getFindings } from '../api/client.js'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, LineChart, Line, BarChart, Bar,
@@ -59,6 +59,9 @@ export default function ConversationIntelligence() {
     escalation: 6 + Math.random() * 3,
   }))
 
+  const [findings, setFindings] = useState([])
+  const [findingsLoading, setFindingsLoading] = useState(false)
+
   // Fetch VAD metrics from the real API when client or dates change
   const fetchVADMetrics = useCallback(() => {
     if (!clientId) {
@@ -78,9 +81,18 @@ export default function ConversationIntelligence() {
       })
   }, [clientId, fromDate, toDate, clientType])
 
+  const fetchFindings = useCallback(() => {
+    setFindingsLoading(true)
+    getFindings({ client_id: clientId, from_date: fromDate, to_date: toDate, client_type: clientType })
+      .then((res) => setFindings(Array.isArray(res) ? res : (res?.findings || [])))
+      .catch(() => setFindings([]))
+      .finally(() => setFindingsLoading(false))
+  }, [clientId, fromDate, toDate, clientType])
+
   useEffect(() => {
     fetchVADMetrics()
-  }, [fetchVADMetrics])
+    fetchFindings()
+  }, [fetchVADMetrics, fetchFindings])
 
   // Trigger VAD processing on the backend
   const handleProcessVAD = useCallback(async () => {
@@ -515,39 +527,47 @@ export default function ConversationIntelligence() {
       {/* Top AI Findings */}
       <div>
         <SectionTitle>Top AI Findings</SectionTitle>
-        <div className="grid grid-cols-2 gap-4">
-          {AI_FINDINGS.map((f) => {
-            const Icon = Icons[toPascal(f.icon)] || Icons.Sparkles
-            return (
-              <Card key={f.id}>
-                <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-[#EEF1FE] flex items-center justify-center shrink-0">
-                    <Icon size={17} className="text-[#3457D5]" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <SeverityBadge level={f.severity} />
+        {findingsLoading ? (
+          <Card><div className="flex items-center justify-center py-8"><RefreshCw size={18} className="animate-spin text-[#3457D5]" /></div></Card>
+        ) : findings.length === 0 ? (
+          <Card><EmptyState text="No AI findings for the selected period." /></Card>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            {findings.map((f) => {
+              const Icon = Icons[toPascal(f.icon || 'sparkles')] || Icons.Sparkles
+              const calls = f.affected_calls || []
+              const agents = f.affected_agents || []
+              return (
+                <Card key={f.id}>
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-[#EEF1FE] flex items-center justify-center shrink-0">
+                      <Icon size={17} className="text-[#3457D5]" />
                     </div>
-                    <p className="text-sm text-[#1D2433] font-medium leading-snug">{f.description}</p>
-                    {f.affected_calls.length > 0 && (
-                      <div className="text-xs text-[#6B7385] mt-2">
-                        {f.affected_calls.length} calls affected · {f.affected_agents.length} agents involved
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <SeverityBadge level={f.severity} />
                       </div>
-                    )}
-                    {f.affected_calls.length > 0 && (
-                      <button
-                        onClick={() => navigate(`/calls?q=${f.affected_calls[0]}`)}
-                        className="mt-2 text-xs font-semibold text-[#3457D5] hover:underline"
-                      >
-                        View Calls →
-                      </button>
-                    )}
+                      <p className="text-sm text-[#1D2433] font-medium leading-snug">{f.description}</p>
+                      {calls.length > 0 && (
+                        <div className="text-xs text-[#6B7385] mt-2">
+                          {calls.length} calls affected · {agents.length} agents involved
+                        </div>
+                      )}
+                      {calls.length > 0 && (
+                        <button
+                          onClick={() => calls.length === 1 ? navigate(`/calls/${calls[0]}`) : navigate(`/calls?q=${encodeURIComponent(calls[0])}`)}
+                          className="mt-2 text-xs font-semibold text-[#3457D5] hover:underline"
+                        >
+                          {calls.length === 1 ? 'View Call →' : 'View Calls →'}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </Card>
-            )
-          })}
-        </div>
+                </Card>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -6,7 +6,7 @@ import {
 } from '../api/client.js'
 import {
   Target, CheckCircle, Clock, AlertTriangle, ArrowRight, Zap,
-  Plus, Trash2, RefreshCw, Activity,
+  Plus, Trash2, RefreshCw, Activity, User, MessageSquare,
 } from 'lucide-react'
 
 const STATUSES = ['Needs Coaching', 'Assigned', 'Completed']
@@ -14,7 +14,7 @@ const statusIcon = { 'Needs Coaching': Target, 'Assigned': Clock, 'Completed': C
 const statusColor = { 'Needs Coaching': '#C9862B', 'Assigned': '#3457D5', 'Completed': '#1C9A6C' }
 
 export default function CoachingCenter() {
-  const { isAdmin } = useAuth()
+  const { isAdmin, user } = useAuth()
   const [items, setItems] = useState([])
   const [allAgents, setAllAgents] = useState([])
   const [selectedItem, setSelectedItem] = useState(null)
@@ -52,11 +52,21 @@ export default function CoachingCenter() {
     const idx = STATUSES.indexOf(item.status)
     if (idx === -1 || idx >= STATUSES.length - 1) return
     const next = STATUSES[idx + 1]
+    const payload = { status: next }
+    if (next === 'Completed') {
+      const remarks = window.prompt('Resolution remarks (required for Completed):', item.resolution_remarks || '')
+      if (remarks === null) return
+      const defaultUser = user?.name || user?.full_name || user?.username || user?.email || 'Admin'
+      const resolvedBy = window.prompt('Resolved by (auto-captured, you can edit):', defaultUser)
+      if (resolvedBy === null) return
+      payload.resolution_remarks = remarks.trim()
+      payload.resolved_by = (resolvedBy || defaultUser).trim()
+    }
     try {
-      await updateCoaching(item.id, { status: next })
-      setItems(prev => prev.map(x => x.id === item.id ? { ...x, status: next } : x))
+      const updated = await updateCoaching(item.id, payload)
+      setItems(prev => prev.map(x => x.id === item.id ? { ...x, ...updated } : x))
       if (selectedItem?.id === item.id) {
-        setSelectedItem(prev => ({ ...prev, status: next }))
+        setSelectedItem(prev => ({ ...prev, ...updated }))
       }
     } catch { /* ignore */ }
   }
@@ -257,8 +267,8 @@ export default function CoachingCenter() {
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-semibold text-[#1C9A6C]">{c.estimated_improvement}</span>
                       {status !== 'Completed' && isAdmin && (
-                        <button onClick={(e) => { e.stopPropagation(); const reason = prompt('Enter query/reason before moving to next stage (optional):'); if (reason === null) return; advance(c); }} className="text-[10px] font-semibold text-[#3457D5] flex items-center gap-0.5">
-                          Advance <ArrowRight size={10} />
+                        <button onClick={(e) => { e.stopPropagation(); advance(c); }} className="text-[10px] font-semibold text-[#3457D5] flex items-center gap-0.5">
+                          {status === 'Assigned' ? 'Resolve' : 'Advance'} <ArrowRight size={10} />
                         </button>
                       )}
                     </div>
@@ -272,6 +282,12 @@ export default function CoachingCenter() {
                     )}
                     {c.reason && (
                       <div className="text-[10px] text-[#6B7385] mt-1 italic">{c.reason}</div>
+                    )}
+                    {status === 'Completed' && (c.resolution_remarks || c.resolved_by) && (
+                      <div className="mt-2 p-2 rounded-lg bg-[#E7F7EF]/60 border border-[#1C9A6C]/20 text-[10px] text-[#1D2433]">
+                        {c.resolved_by && <div className="flex items-center gap-1 font-semibold text-[#1C9A6C]"><User size={10} /> Closed by: {c.resolved_by}</div>}
+                        {c.resolution_remarks && <div className="mt-1 flex items-start gap-1 text-[#6B7385]"><MessageSquare size={10} className="mt-0.5" /> <span>{c.resolution_remarks}</span></div>}
+                      </div>
                     )}
                   </div>
                 ))}
@@ -345,9 +361,17 @@ export default function CoachingCenter() {
               <p className="text-sm font-semibold text-[#1C9A6C]">{selectedItem.estimated_improvement}</p>
               {selectedItem.status !== 'Completed' && isAdmin && (
                 <div className="mt-3">
-                  <button onClick={() => { const reason = prompt('Enter query/reason before moving to next stage (optional):'); if (reason === null) return; advance(selectedItem); }} className="text-xs font-semibold px-4 py-2 rounded-xl bg-[#3457D5] text-white hover:opacity-90 transition">
-                    Assign Training
+                  <button onClick={() => advance(selectedItem)} className="text-xs font-semibold px-4 py-2 rounded-xl bg-[#3457D5] text-white hover:opacity-90 transition">
+                    {selectedItem.status === 'Assigned' ? 'Mark Resolved' : 'Assign / Advance'}
                   </button>
+                </div>
+              )}
+              {selectedItem.status === 'Completed' && (
+                <div className="mt-3 p-3 rounded-xl bg-[#E7F7EF] border border-[#1C9A6C]/20">
+                  <div className="text-xs font-semibold text-[#1C9A6C] mb-1">Resolved</div>
+                  <div className="text-xs text-[#1D2433]"><span className="font-semibold">Closed by:</span> {selectedItem.resolved_by || '—'}</div>
+                  <div className="text-xs text-[#1D2433] mt-1"><span className="font-semibold">Remarks:</span> {selectedItem.resolution_remarks || '—'}</div>
+                  {selectedItem.resolved_at && <div className="text-[10px] text-[#6B7385] mt-1">At: {selectedItem.resolved_at}</div>}
                 </div>
               )}
             </div>

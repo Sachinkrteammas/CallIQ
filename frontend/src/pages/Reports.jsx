@@ -1,25 +1,23 @@
 import React, { useState } from 'react'
 import { Card, SectionTitle } from '../components/shared.jsx'
-import { FileText, Download, Loader2, Clock, CheckCircle, Mail, Calendar, Filter } from 'lucide-react'
+import { FileText, Download, Loader2, Clock, CheckCircle, Mail, Calendar, Filter, AlertTriangle } from 'lucide-react'
 import { useClientFilter } from '../components/ClientContext.jsx'
+import { exportClientWiseReport, exportAgentWiseReport, exportAuditsReport } from '../api/client.js'
 
 const TYPES = [
-  { name: 'Executive Summary', icon: FileText, desc: 'High-level overview of all metrics and key findings' },
-  { name: 'Agent Performance', icon: FileText, desc: 'Individual agent scores, trends, and comparisons' },
-  { name: 'Compliance Audit', icon: FileText, desc: 'Compliance violations, patterns, and recommendations' },
-  { name: 'Conversation Intelligence', icon: FileText, desc: 'AI-detected behaviours, sentiment, and patterns' },
-  { name: 'Incident Report', icon: FileText, desc: 'All incidents with severity, status, and resolution' },
-  { name: 'Coaching Effectiveness', icon: FileText, desc: 'Training outcomes and improvement metrics' },
-  { name: 'Queue Performance', icon: FileText, desc: 'Queue-wise score breakdown and volume analysis' },
-  { name: 'Client Scorecard', icon: FileText, desc: 'Per-client quality metrics and SLA compliance' },
-  { name: 'Sales Categorization', icon: FileText, desc: 'Genuine vs Invalid sales with reasons' },
+  { name: 'Detailed Audit Records', icon: FileText, desc: 'Call-level audit export with scores, sale status and reasons', export: 'audits' },
+  { name: 'Agent Performance', icon: FileText, desc: 'Agent-wise audits, scores and sale outcomes', export: 'agent' },
+  { name: 'Client Scorecard', icon: FileText, desc: 'Client-wise summary of audits and sales quality', export: 'client' },
+  { name: 'Sales Categorization', icon: FileText, desc: 'Genuine vs Invalid sales with reasons (included in audit export)', export: 'audits' },
+  { name: 'Executive Summary', icon: FileText, desc: 'Use Client Scorecard export for a client-level summary', export: 'client' },
+  { name: 'Compliance Audit', icon: FileText, desc: 'Use Detailed Audit Records export and filter by fatal/score in sheet', export: 'audits' },
 ]
-const FORMATS = ['PDF', 'Excel', 'CSV', 'Email']
+const FORMATS = ['CSV']
 
 export default function Reports() {
   const { clients, clientId, setClientId, fromDate, toDate, setFromDate, setToDate } = useClientFilter()
   const [type, setType] = useState(TYPES[0].name)
-  const [format, setFormat] = useState('PDF')
+  const [format, setFormat] = useState('CSV')
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
   
@@ -29,9 +27,31 @@ export default function Reports() {
   const [saleCategory, setSaleCategory] = useState('')
   const [invalidReason, setInvalidReason] = useState('')
 
-  const generate = () => {
-    setLoading(true); setDone(false)
-    setTimeout(() => { setLoading(false); setDone(true) }, 1500)
+  const [error, setError] = useState(null)
+
+  const generate = async () => {
+    setLoading(true); setDone(false); setError(null)
+    try {
+      const params = {}
+      if (fromDate) params.from_date = fromDate
+      if (toDate) params.to_date = toDate
+      if (clientId && clientId !== 'all') params.client_id = clientId
+      if (saleCategory) params.sale_category = saleCategory
+
+      const selected = TYPES.find(t => t.name === type) || TYPES[0]
+      if (selected.export === 'client') {
+        await exportClientWiseReport(params)
+      } else if (selected.export === 'agent') {
+        await exportAgentWiseReport(params)
+      } else {
+        await exportAuditsReport(params)
+      }
+      setDone(true)
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Failed to export report')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -148,23 +168,24 @@ export default function Reports() {
               ))}
             </div>
           </div>
-          <div className="mb-4">
-            <div className="text-xs font-semibold text-[#6B7385] mb-2 uppercase">Export Format</div>
-            <div className="flex gap-2">
-              {FORMATS.map((f) => (
-                <button key={f} onClick={() => setFormat(f)} className={`text-xs font-semibold px-4 py-2 rounded-full border transition ${format === f ? 'bg-[#16213E] text-white border-[#16213E]' : 'border-[#E7E2D8] text-[#6B7385] hover:border-[#3457D5]/40'}`}>{f}</button>
-              ))}
-            </div>
-          </div>
+
           <button onClick={generate} className="flex items-center gap-2 bg-[#3457D5] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:opacity-90 transition">
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-            {loading ? 'Generating…' : `Generate ${type} (${format})`}
+            {loading ? 'Exporting…' : `Export ${type} (CSV)`}
           </button>
           {done && (
             <div className="flex items-center gap-2 text-xs text-[#1C9A6C] font-semibold mt-3">
-              <CheckCircle size={14} /> Report generated successfully — ready for download
+              <CheckCircle size={14} /> Report exported successfully
             </div>
           )}
+          {error && (
+            <div className="flex items-center gap-2 text-xs text-[#D14343] font-semibold mt-3">
+              <AlertTriangle size={14} /> {error}
+            </div>
+          )}
+          <div className="mt-2 text-[10px] text-[#6B7385]">
+            Exports use real audited data and respect Client, Date range and Sale Status filters. PDF/Excel/Email scheduling is not configured in this build.
+          </div>
         </Card>
 
         <div className="space-y-6">

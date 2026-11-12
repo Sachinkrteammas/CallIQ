@@ -8,11 +8,12 @@ SECTION_WEIGHTS = {
     "closure": 25,
 }
 
+# Quality bands requested by QA:
+# TQ: 94%–100% (Excellent), MQ: 89%–93% (Meets Expectations), BQ: below 89% (Needs Improvement)
 RANKING_BANDS = (
-    (85.0, "Excellent"),
-    (70.0, "Good"),
-    (50.0, "Average"),
-    (0.0, "Poor"),
+    (94.0, "TQ"),
+    (89.0, "MQ"),
+    (0.0, "BQ"),
 )
 
 
@@ -157,7 +158,7 @@ def ranking_for(score: float) -> str:
         if score >= threshold:
             return label
 
-    return "Poor"
+    return "BQ"
 
 
 def derive_scoring(

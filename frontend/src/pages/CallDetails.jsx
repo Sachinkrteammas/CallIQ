@@ -278,10 +278,19 @@ export default function CallDetails() {
           <Card>
             <SectionTitle>AI Conversation Score</SectionTitle>
             <div className="text-center mb-4">
-              <div className="text-4xl font-extrabold text-[#1D2433]">{call.scores?.overall ?? 0}<span className="text-lg">%</span></div>
-              <div className="text-xs text-[#6B7385]">Overall Conversation Score</div>
+              <div className="text-4xl font-extrabold text-[#1D2433]">
+                {call.has_audit === false || call.audit_pending || call.scores?.overall == null ? '—' : call.scores.overall}
+                <span className="text-lg">{call.has_audit === false || call.audit_pending || call.scores?.overall == null ? '' : '%'}</span>
+              </div>
+              <div className="text-xs text-[#6B7385]">
+                {call.has_audit === false || call.audit_pending ? 'Audit Pending' : 'Overall Conversation Score'}
+              </div>
             </div>
-            {parameterEntries.map((p) => (
+            {(call.has_audit === false || call.audit_pending) ? (
+              <div className="text-xs text-[#6B7385] bg-[#F7F4EE] border border-[#E7E2D8] rounded-xl p-3">
+                Audit pending. Run STT and audit for this call after ensuring an Active prompt is configured for the client.
+              </div>
+            ) : parameterEntries.map((p) => (
               <ProgressBar key={p.key} label={p.label} value={p.percentage || 0} />
             ))}
           </Card>

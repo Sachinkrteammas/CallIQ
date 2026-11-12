@@ -1,12 +1,11 @@
 import asyncio
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
 from app.core.config import get_settings
 from app.services.recording_url import normalize_recording_url
-from typing import Dict, Any
 
 
 VOICEMAIL_KEYWORDS = [
@@ -16,15 +15,9 @@ VOICEMAIL_KEYWORDS = [
 
 
 def is_voicemail(transcript: str) -> bool:
-    transcript = transcript.lower().strip()
-
-    # Normalize spaces
+    transcript = (transcript or "").lower().strip()
     transcript = " ".join(transcript.split())
-
-    return any(
-        keyword.lower() in transcript
-        for keyword in VOICEMAIL_KEYWORDS
-    )
+    return any(keyword.lower() in transcript for keyword in VOICEMAIL_KEYWORDS)
 
 
 def _extract_deepgram_transcript(payload: Dict[str, Any]) -> str:
@@ -41,29 +34,35 @@ def _extract_deepgram_transcript(payload: Dict[str, Any]) -> str:
 def _deepgram_params() -> Dict[str, str]:
     settings = get_settings()
     params: Dict[str, str] = {
-        "model": settings.stt_model,
+        "model": getattr(settings, "stt_model", ""),
         "smart_format": "true",
         "punctuate": "true",
         "paragraphs": "true",
         "utterances": "true",
         "diarize": "true",
     }
-    if settings.stt_language:
-        params["language"] = settings.stt_language
+    language = getattr(settings, "stt_language", None)
+    if language:
+        params["language"] = language
     return params
+
 
 async def transcribe_audio(
     recording_path: str,
     call_time: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     settings = get_settings()
-    if settings.stt_mock_enabled:
+    if getattr(settings, "stt_mock_enabled", False):
         return {
             "transcript": f"[MOCK TRANSCRIPT] {recording_path}",
             "voice_mail": False,
         }
 
-    recording_path = normalize_recording_url(recording_path, call_time)
+    # Normalize recording URL/path when helper supports call_time context
+    try:
+        recording_path = normalize_recording_url(recording_path, call_time)
+    except TypeError:
+        recording_path = normalize_recording_url(recording_path)
 
     if recording_path.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=180.0) as client:
@@ -77,7 +76,7 @@ async def transcribe_audio(
     transcript = await transcribe_audio_bytes(
         audio_bytes=audio_bytes,
         filename=recording_path,
-        content_type="audio/mpeg",
+        content_type="application/octet-stream",
     )
 
     # Empty transcript is valid (silence / ring-only calls). The worker
@@ -85,7 +84,7 @@ async def transcribe_audio(
     voice_mail = is_voicemail(transcript)
 
     return {
-        "transcript": transcript,
+        "transcript": transcript or "",
         "voice_mail": voice_mail,
     }
 
@@ -95,14 +94,14 @@ async def transcribe_audio_bytes(
     filename: str = "recording.wav",
     content_type: str = "audio/wav",
     poll_timeout: float = 300.0,
-    poll_interval: float = 3.0,
+    poll_interval: float = 2.0,
 ) -> str:
     settings = get_settings()
-    if settings.stt_mock_enabled:
+    if getattr(settings, "stt_mock_enabled", False):
         return f"[MOCK TRANSCRIPT] {filename}"
 
     base_url = (getattr(settings, "stt_api_base_url", None) or "http://192.168.11.243:8030").rstrip("/")
-    fname = filename.replace("\\", "/").split("/")[-1]
+    fname = filename.replace("\\", "/").split("/")[-1] or "recording.wav"
     upload_content_type = content_type or "audio/mpeg"
     files = {"fh": (fname, audio_bytes, upload_content_type)}
     data = {
@@ -123,9 +122,7 @@ async def transcribe_audio_bytes(
 
         while loop.time() < deadline:
             try:
-                status_resp = await client.get(
-                    f"{base_url}/check-status", params={"fnames": fname}
-                )
+                status_resp = await client.get(f"{base_url}/check-status", params={"fnames": fname})
                 status_resp.raise_for_status()
                 tasks = status_resp.json().get("tasks", [])
                 task = next((t for t in tasks if t.get("filename") == fname), None)
@@ -151,6 +148,27 @@ async def transcribe_audio_bytes(
     if ready:
         return ""
 
-    raise RuntimeError(
-        f"Transcription API did not finish within {int(poll_timeout)}s for {fname}"
-    )
+    raise RuntimeError(f"Transcription API did not return a transcript in time for {fname}")
+
+    # ===== Old Deepgram implementation (kept for reference) =====
+    # if not settings.stt_api_key:
+    #     raise RuntimeError("STT_API_KEY is missing in backend/.env")
+    #
+    # upload_content_type = content_type or "application/octet-stream"
+    # if upload_content_type == "audio/wav":
+    #     upload_content_type = "application/octet-stream"
+    # headers = {"Authorization": f"Token {settings.stt_api_key}", "Content-Type": upload_content_type}
+    #
+    # async with httpx.AsyncClient(timeout=180.0) as client:
+    #     response = await client.post(
+    #         settings.stt_api_url,
+    #         headers=headers,
+    #         params=_deepgram_params(),
+    #         content=audio_bytes,
+    #     )
+    #     response.raise_for_status()
+    #
+    # transcript = _extract_deepgram_transcript(response.json())
+    # if not transcript:
+    #     raise RuntimeError("Deepgram response did not include transcript")
+    # return transcript

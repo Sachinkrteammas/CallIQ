@@ -1,4 +1,4 @@
-import random
+﻿import random
 import json
 from typing import Optional
 from fastapi import APIRouter, Query, HTTPException, Depends
@@ -13,7 +13,8 @@ router = APIRouter(prefix="/api/calls", tags=["calls"])
 
 
 def _db_row_to_call(row, agent_info=None) -> dict:
-    audit_json = row.get("audit_json") or {}
+    raw_audit_json = row.get("audit_json")
+    audit_json = raw_audit_json or {}
     if isinstance(audit_json, str):
         try:
             audit_json = json.loads(audit_json)
@@ -24,6 +25,10 @@ def _db_row_to_call(row, agent_info=None) -> dict:
     if recording and not recording.startswith("http"):
         recording = f"http://{recording}"
 
+    has_audit = any(
+        row.get(k) is not None for k in ("total_score", "percentage", "ranking")
+    ) or (raw_audit_json not in (None, "", {}, "{}", "null")) or bool(audit_json)
+
     return {
         "_call_id": row.get("call_id"),
         "_id": row.get("call_id"),
@@ -32,17 +37,18 @@ def _db_row_to_call(row, agent_info=None) -> dict:
         "_duration": row.get("duration") or 0,
         "_created_at": str(row.get("start_time") or row.get("created_at") or ""),
         "_recording_path": recording,
-        "total_score": row.get("total_score") or 0,
-        "percentage": row.get("percentage") or 0,
-        "ranking": row.get("ranking") or "—",
-        "fatal_flag": row.get("fatal_flag") or False,
+        "has_audit": has_audit,
+        "total_score": row.get("total_score") if has_audit else None,
+        "percentage": row.get("percentage") if has_audit else None,
+        "ranking": row.get("ranking") if has_audit else "Pending",
+        "fatal_flag": bool(row.get("fatal_flag")) if has_audit else False,
         "call_category": audit_json.get("call_category") or "—",
         "sections": audit_json.get("sections") or {},
-        "sale_category": row.get("sale_category") or "Unknown",
-        "invalid_reason": row.get("invalid_reason"),
-        "crm_sale_done": row.get("crm_sale_done") or False,
-        "customer_confirmation": row.get("customer_confirmation") or "Not Confirmed",
-        "order_information": row.get("order_information") or "Not Available",
+        "sale_category": row.get("sale_category") if has_audit else "Pending",
+        "invalid_reason": row.get("invalid_reason") if has_audit else None,
+        "crm_sale_done": bool(row.get("crm_sale_done")) if has_audit and row.get("crm_sale_done") is not None else False,
+        "customer_confirmation": row.get("customer_confirmation") if has_audit else "Pending",
+        "order_information": row.get("order_information") if has_audit else "Pending",
         "agent_total_audits": (agent_info or {}).get("total_audits", 0),
         "agent_avg_score": (agent_info or {}).get("avg_score", 0),
         "agent_fatal_count": (agent_info or {}).get("fatal_count", 0),
@@ -115,6 +121,9 @@ def list_calls(
     if client_id:
         where.append("cl.client_id = :client_id")
         params["client_id"] = client_id
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(f"cl.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
     if agent_id:
         where.append("cl.agent_id = :agent_id")
         params["agent_id"] = agent_id
@@ -140,14 +149,14 @@ def list_calls(
         where.append("ca.order_information = :order_information")
         params["order_information"] = order_information
 
-    # ═══ BAND FILTER ═══
+    # â•â•â• BAND FILTER â•â•â•
     if band:
         if band == "BQ":
-            where.append("ca.percentage < 60")
+            where.append("ca.percentage < 89")
         elif band == "MQ":
-            where.append("ca.percentage >= 60 AND ca.percentage < 80")
+            where.append("ca.percentage >= 89 AND ca.percentage < 94")
         elif band == "TQ":
-            where.append("ca.percentage >= 80")
+            where.append("ca.percentage >= 94")
 
     wc = " AND ".join(where)
 

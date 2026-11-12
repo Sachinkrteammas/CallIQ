@@ -70,25 +70,29 @@ export default function Overview() {
 
     const params = { from_date: fromDate, to_date: toDate }
     if (!isAllClients) params.client_id = clientId
+    if (isAllClients && clientType) params.client_type = clientType
 
     const req = isAllClients
       ? getClientsSummary(fromDate, toDate, clientType)
       : getClientOverview(clientId, fromDate, toDate, clientType)
 
-    Promise.all([
+    const isServiceView = clientType === 'Service' || selectedClient?.type === 'Service'
+    const promises = [
       req,
-      getSalesCategorization(params).catch(() => null),
+      isServiceView ? Promise.resolve(null) : getSalesCategorization(params).catch(() => null),
       getCallDurationCategories(params).catch(() => null),
       getMonthlyAuditSummary(params).catch(() => null),
       getScoreByParameter(params).catch(() => null),
       getAgentLeaderboard(params).catch(() => null),
       getTrends(params).catch(() => null),
       getQualityBands(params).catch(() => null),
-    ])
+    ]
+
+    Promise.all(promises)
       .then(([overviewRes, salesRes, durRes, monthlyRes, paramRes, lbRes, trendRes, qbRes]) => {
         if (!cancelled) {
           setData(overviewRes)
-          setSalesData(salesRes)
+          setSalesData(isServiceView ? null : salesRes)
           setDurationData(durRes)
           setMonthlyData(monthlyRes)
           setParamData(paramRes)
@@ -114,6 +118,7 @@ export default function Overview() {
     if (fromDate) p.set('from', fromDate)
     if (toDate) p.set('to', toDate)
     if (clientId && clientId !== 'all') p.set('client_id', clientId)
+    if (isAllClients && clientType) p.set('client_type', clientType)
     navigate(`/calls?${p.toString()}`)
   }
 
@@ -123,6 +128,7 @@ export default function Overview() {
     if (fromDate) p.set('from', fromDate)
     if (toDate) p.set('to', toDate)
     if (clientId && clientId !== 'all') p.set('client_id', clientId)
+    if (isAllClients && clientType) p.set('client_type', clientType)
     navigate(`/calls?${p.toString()}`)
   }
 
@@ -131,6 +137,7 @@ export default function Overview() {
     if (fromDate) p.set('from', fromDate)
     if (toDate) p.set('to', toDate)
     if (clientId && clientId !== 'all') p.set('client_id', clientId)
+    if (isAllClients && clientType) p.set('client_type', clientType)
     navigate(`/calls?${p.toString()}`)
   }
 
@@ -196,7 +203,7 @@ export default function Overview() {
           </div>
         </Card>
 
-        <SalesCategorizationBlock salesData={salesData} />
+        {clientType === 'Sales' && <SalesCategorizationBlock salesData={salesData} />}
       </div>
     )
   }
@@ -271,7 +278,7 @@ export default function Overview() {
       {paramData && <ScoreByParameterBlock paramData={paramData} />}
       {trendsData && <TrendsBlock trendsData={trendsData} />}
       {leaderboard && <AgentLeaderboardBlock leaderboard={leaderboard} onAgentClick={goToAgentCalls} />}
-      <SalesCategorizationBlock salesData={salesData} />
+      {clientType === 'Sales' && <SalesCategorizationBlock salesData={salesData} />}
       {durationData && (
         <Card>
           <h3 className="text-[15px] font-semibold text-[#1D2433] mb-3 flex items-center gap-2">

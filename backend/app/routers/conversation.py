@@ -115,26 +115,133 @@ def heatmap():
 
 
 @router.get("/findings")
-def findings():
-    random.seed(23)
-    templates = [
-        ("Repeated dead air over 15s detected across Billing queue calls", "High", "phone-off"),
-        ("Agents frequently overtalk customers during refund disputes", "Medium", "mic"),
-        ("Compliance disclaimer skipped in 1 of 6 calls this week", "High", "shield-alert"),
-        ("Abusive language detected in escalated Technical Support calls", "Critical", "alert-triangle"),
-        ("Hold time exceeds 3 minutes on VIP-Support queue", "Medium", "clock"),
-        ("Script deviation increasing on outbound sales calls", "Low", "file-warning"),
-    ]
+def findings(
+    client_id: str = Query(default=None),
+    from_date: str = Query(default=None),
+    to_date: str = Query(default=None),
+    client_type: str = Query(default=None),
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Top AI findings derived from real audited calls."""
+    if not to_date:
+        to_date = datetime.now().strftime("%Y-%m-%d")
+    if not from_date:
+        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    if not user.get("is_admin"):
+        client_id = str(user.get("client_id") or "all")
+        client_type = None
+
+    where = ["DATE(ca.created_at) BETWEEN :from_date AND :to_date"]
+    params = {"from_date": from_date, "to_date": to_date}
+
+    if client_id and client_id != "all":
+        try:
+            params["client_id"] = int(client_id)
+            where.append("ca.client_id = :client_id")
+        except (TypeError, ValueError):
+            pass
+    elif client_type and client_type.lower() in ("sales", "service"):
+        op = "=" if client_type.lower() == "sales" else "!="
+        where.append(
+            f"ca.client_id IN (SELECT id FROM clients "
+            f"WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)"
+        )
+
+    wc = " AND ".join(where)
     out = []
-    for i, (desc, sev, icon) in enumerate(templates):
-        affected_calls = random.sample(data.CALLS, k=6)
-        affected_agents = list({c["agent_name"] for c in affected_calls})[:4]
+
+    try:
+        fatal_rows = db.execute(text(f"""
+            SELECT ca.call_id, ca.agent_id
+            FROM call_audits ca
+            WHERE {wc} AND (ca.fatal_flag = 1 OR ca.percentage < 60)
+            ORDER BY ca.created_at DESC
+            LIMIT 12
+        """), params).mappings().all()
+    except Exception:
+        fatal_rows = []
+
+    if fatal_rows:
+        call_ids = [r["call_id"] for r in fatal_rows if r.get("call_id")]
+        agents = list({r["agent_id"] for r in fatal_rows if r.get("agent_id")})[:6]
         out.append({
-            "id": f"find{i+1}",
-            "icon": icon,
-            "severity": sev,
-            "description": desc,
-            "affected_calls": [c["id"] for c in affected_calls],
-            "affected_agents": affected_agents,
+            "id": "fatal_low_score",
+            "icon": "alert-triangle",
+            "severity": "Critical",
+            "description": f"{len(call_ids)} calls flagged as fatal or low quality in the selected period.",
+            "affected_calls": call_ids[:10],
+            "affected_agents": agents,
         })
+
+    try:
+        low_rows = db.execute(text(f"""
+            SELECT ca.call_id, ca.agent_id, ca.percentage
+            FROM call_audits ca
+            WHERE {wc} AND ca.percentage < 89 AND ca.fatal_flag = 0
+            ORDER BY ca.percentage ASC, ca.created_at DESC
+            LIMIT 10
+        """), params).mappings().all()
+    except Exception:
+        low_rows = []
+
+    if low_rows:
+        call_ids = [r["call_id"] for r in low_rows if r.get("call_id")]
+        agents = list({r["agent_id"] for r in low_rows if r.get("agent_id")})[:6]
+        out.append({
+            "id": "needs_improvement",
+            "icon": "trending-down",
+            "severity": "High",
+            "description": f"{len(call_ids)} calls scored below MQ threshold (89%) and need review/coaching.",
+            "affected_calls": call_ids[:10],
+            "affected_agents": agents,
+        })
+
+    try:
+        invalid_rows = db.execute(text(f"""
+            SELECT ca.call_id, ca.agent_id
+            FROM call_audits ca
+            WHERE {wc} AND ca.sale_category = 'Invalid'
+            ORDER BY ca.created_at DESC
+            LIMIT 10
+        """), params).mappings().all()
+    except Exception:
+        invalid_rows = []
+
+    if invalid_rows:
+        call_ids = [r["call_id"] for r in invalid_rows if r.get("call_id")]
+        agents = list({r["agent_id"] for r in invalid_rows if r.get("agent_id")})[:6]
+        out.append({
+            "id": "invalid_sales",
+            "icon": "shield-alert",
+            "severity": "High",
+            "description": f"{len(call_ids)} invalid sales detected (forcefully placed / not confirmed / without information).",
+            "affected_calls": call_ids[:10],
+            "affected_agents": agents,
+        })
+
+    try:
+        recent_rows = db.execute(text(f"""
+            SELECT ca.call_id, ca.agent_id
+            FROM call_audits ca
+            WHERE {wc}
+            ORDER BY ca.created_at DESC
+            LIMIT 10
+        """), params).mappings().all()
+    except Exception:
+        recent_rows = []
+
+    if recent_rows and not out:
+        call_ids = [r["call_id"] for r in recent_rows if r.get("call_id")]
+        agents = list({r["agent_id"] for r in recent_rows if r.get("agent_id")})[:6]
+        out.append({
+            "id": "recent_audits",
+            "icon": "sparkles",
+            "severity": "Low",
+            "description": f"{len(call_ids)} recent audited calls available for review.",
+            "affected_calls": call_ids[:10],
+            "affected_agents": agents,
+        })
+
     return out
