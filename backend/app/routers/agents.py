@@ -40,6 +40,9 @@ class CoachingUpdate(BaseModel):
     estimated_improvement: Optional[str] = None
     reason: Optional[str] = None
     team: Optional[str] = None
+    trainer_name: Optional[str] = None
+    trainer_id: Optional[str] = None
+    coaching_type: Optional[str] = None
     resolution_remarks: Optional[str] = None
     resolved_by: Optional[str] = None
 
@@ -51,6 +54,9 @@ class CoachingCreate(BaseModel):
     recommendation: Optional[str] = ""
     estimated_improvement: Optional[str] = ""
     reason: Optional[str] = ""
+    trainer_name: Optional[str] = None
+    trainer_id: Optional[str] = None
+    coaching_type: Optional[str] = None
     status: Optional[str] = "Needs Coaching"
 
 
@@ -248,6 +254,9 @@ def _ensure_coaching_table(db: Session = None):
                 evidence TEXT,
                 score_at_flag DECIMAL(5,1) DEFAULT NULL,
                 reason VARCHAR(255) DEFAULT NULL,
+                trainer_name VARCHAR(255) NULL,
+                trainer_id VARCHAR(50) NULL,
+                coaching_type VARCHAR(50) NULL,
                 resolution_remarks TEXT NULL,
                 resolved_by VARCHAR(255) NULL,
                 resolved_at TIMESTAMP NULL,
@@ -257,6 +266,9 @@ def _ensure_coaching_table(db: Session = None):
         """))
         # Add missing columns for existing DBs
         for col, ddl in [
+            ("trainer_name", "ALTER TABLE coaching_queue ADD COLUMN trainer_name VARCHAR(255) NULL"),
+            ("trainer_id", "ALTER TABLE coaching_queue ADD COLUMN trainer_id VARCHAR(50) NULL"),
+            ("coaching_type", "ALTER TABLE coaching_queue ADD COLUMN coaching_type VARCHAR(50) NULL"),
             ("resolution_remarks", "ALTER TABLE coaching_queue ADD COLUMN resolution_remarks TEXT NULL"),
             ("resolved_by", "ALTER TABLE coaching_queue ADD COLUMN resolved_by VARCHAR(255) NULL"),
             ("resolved_at", "ALTER TABLE coaching_queue ADD COLUMN resolved_at TIMESTAMP NULL"),
@@ -285,6 +297,9 @@ def _coaching_row_to_item(row) -> dict:
         "evidence": m.get("evidence"),
         "score_at_flag": float(score) if score is not None else None,
         "reason": m.get("reason") or "",
+        "trainer_name": m.get("trainer_name") or "",
+        "trainer_id": m.get("trainer_id") or "",
+        "coaching_type": m.get("coaching_type") or "",
         "resolution_remarks": m.get("resolution_remarks") or "",
         "resolved_by": m.get("resolved_by") or "",
         "resolved_at": str(resolved_at) if resolved_at else None,
@@ -296,6 +311,7 @@ def _coaching_items_from_db(db: Session, client_id: Optional[int] = None) -> lis
     rows = db.execute(text("""
         SELECT id, agent_id, agent_name, team, status, recommendation,
                estimated_improvement, evidence, score_at_flag, reason,
+               trainer_name, trainer_id, coaching_type,
                resolution_remarks, resolved_by, resolved_at
         FROM coaching_queue
         ORDER BY updated_at DESC, id DESC
@@ -360,6 +376,7 @@ def create_coaching_item(payload: CoachingCreate, db: Session = Depends(get_db))
     row = db.execute(text("""
         SELECT id, agent_id, agent_name, team, status, recommendation,
                estimated_improvement, evidence, score_at_flag, reason,
+               trainer_name, trainer_id, coaching_type,
                resolution_remarks, resolved_by, resolved_at
         FROM coaching_queue WHERE id = :id
     """), {"id": item_id}).mappings().one()
@@ -436,6 +453,7 @@ def update_coaching_item(item_id: str, payload: CoachingUpdate, db: Session = De
     row = db.execute(text("""
         SELECT id, agent_id, agent_name, team, status, recommendation,
                estimated_improvement, evidence, score_at_flag, reason,
+               trainer_name, trainer_id, coaching_type,
                resolution_remarks, resolved_by, resolved_at
         FROM coaching_queue WHERE id = :id
     """), {"id": item_id}).mappings().one_or_none()

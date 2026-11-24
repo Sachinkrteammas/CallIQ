@@ -54,13 +54,22 @@ export default function CoachingCenter() {
     const next = STATUSES[idx + 1]
     const payload = { status: next }
     if (next === 'Completed') {
-      const remarks = window.prompt('Resolution remarks (required for Completed):', item.resolution_remarks || '')
-      if (remarks === null) return
       const defaultUser = user?.name || user?.full_name || user?.username || user?.email || 'Admin'
+      const remarks = window.prompt('Resolution remarks:', item.resolution_remarks || '')
+      if (remarks === null) return
       const resolvedBy = window.prompt('Resolved by (auto-captured, you can edit):', defaultUser)
       if (resolvedBy === null) return
+      const trainerName = window.prompt('Trainer Name:', item.trainer_name || '')
+      if (trainerName === null) return
+      const trainerId = window.prompt('Trainer ID:', item.trainer_id || '')
+      if (trainerId === null) return
+      const coachingType = window.prompt('Coaching Type (Assigned Training / Refresher Training / Feedback Session):', item.coaching_type || 'Assigned Training')
+      if (coachingType === null) return
       payload.resolution_remarks = remarks.trim()
       payload.resolved_by = (resolvedBy || defaultUser).trim()
+      payload.trainer_name = (trainerName || '').trim()
+      payload.trainer_id = (trainerId || '').trim()
+      payload.coaching_type = (coachingType || '').trim() || 'Assigned Training'
     }
     try {
       const updated = await updateCoaching(item.id, payload)
@@ -283,9 +292,12 @@ export default function CoachingCenter() {
                     {c.reason && (
                       <div className="text-[10px] text-[#6B7385] mt-1 italic">{c.reason}</div>
                     )}
-                    {status === 'Completed' && (c.resolution_remarks || c.resolved_by) && (
+                    {status === 'Completed' && (c.resolution_remarks || c.resolved_by || c.trainer_name || c.coaching_type) && (
                       <div className="mt-2 p-2 rounded-lg bg-[#E7F7EF]/60 border border-[#1C9A6C]/20 text-[10px] text-[#1D2433]">
-                        {c.resolved_by && <div className="flex items-center gap-1 font-semibold text-[#1C9A6C]"><User size={10} /> Closed by: {c.resolved_by}</div>}
+                        {c.trainer_name && <div className="flex items-center gap-1 font-semibold text-[#1C9A6C]"><User size={10} /> Trainer: {c.trainer_name}{c.trainer_id && ` (${c.trainer_id})`}</div>}
+                        {c.coaching_type && <div className="mt-0.5 font-semibold text-[#1C9A6C]">Type: {c.coaching_type}</div>}
+                        {c.resolved_by && <div className="flex items-center gap-1 font-semibold text-[#1C9A6C] mt-0.5"><User size={10} /> Closed by: {c.resolved_by}</div>}
+                        {c.resolved_at && <div className="text-[10px] text-[#6B7385]">Completed At: {new Date(c.resolved_at).toLocaleString()}</div>}
                         {c.resolution_remarks && <div className="mt-1 flex items-start gap-1 text-[#6B7385]"><MessageSquare size={10} className="mt-0.5" /> <span>{c.resolution_remarks}</span></div>}
                       </div>
                     )}

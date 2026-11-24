@@ -110,6 +110,20 @@ export const createAiPrompt = (payload) => api.post('/settings/ai-prompts', payl
 export const updateAiPrompt = (id, payload) => api.patch(`/settings/ai-prompts/${id}`, payload).then(r => r.data)
 export const activateAiPrompt = (id) => api.post(`/settings/ai-prompts/${id}/activate`).then(r => r.data)
 export const deleteAiPrompt = (id) => api.delete(`/settings/ai-prompts/${id}`).then(r => r.data)
+export const testAiPrompt = (payload) => api.post('/settings/ai-prompts/test', payload).then(r => r.data)
+export const listPromptDocuments = (clientId) =>
+  api.get('/settings/ai-prompts/documents', { params: clientId ? { client_id: clientId } : {} }).then(r => r.data)
+export const uploadPromptDocuments = (clientId, files) => {
+  const fd = new FormData()
+  fd.append('client_id', clientId)
+  files.forEach((f) => fd.append('files', f))
+  return api.post('/settings/ai-prompts/documents', fd, { headers: { 'Content-Type': undefined } }).then(r => r.data)
+}
+export const generatePromptFromDocs = (clientId) => {
+  const fd = new FormData()
+  fd.append('client_id', clientId)
+  return api.post('/settings/ai-prompts/generate-from-docs', fd, { headers: { 'Content-Type': undefined } }).then(r => r.data)
+}
 
 export const listClients = () => api.get('/clients').then(r => r.data)
 export const listAllClients = () => api.get('/clients/list').then(r => r.data)
@@ -177,6 +191,11 @@ export const exportAuditsReport = (params = {}) =>
   api.get('/reports/audits/export', { params, responseType: 'blob' }).then(r => {
     downloadBlob(r.data, filenameFromDisposition(r.headers['content-disposition'], 'audits_export.csv'))
   })
+
+// Issue 6 / 10: live pipeline triggers + status
+export const triggerPipeline = (params = {}) => api.post('/ops/pipeline/trigger', null, { params }).then(r => r.data)
+export const getPipelineStatus = (params = {}) => api.get('/ops/pipeline/status', { params }).then(r => r.data)
+
 export const getClientSettings = async (clientId) => {
   try {
     const res = await api.get(`/client-settings/${clientId}`)

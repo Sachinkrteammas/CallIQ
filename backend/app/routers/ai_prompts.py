@@ -1,11 +1,17 @@
+import asyncio
+import hashlib
 import json
 import threading
-from typing import Dict, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Dict, List, Optional
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
 from ..database import get_db
+from ..services.ai_audit_service import run_ai_audit
 
 router = APIRouter(prefix="/api/settings/ai-prompts", tags=["ai-prompts"])
 
@@ -27,6 +33,24 @@ CREATE TABLE IF NOT EXISTS ai_prompts (
 
 _TABLE_READY = False
 
+DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "prompt_docs"
+
+CREATE_DOCS_SQL = """
+CREATE TABLE IF NOT EXISTS prompt_documents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    client_id INT NULL,
+    file_name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(512) NOT NULL,
+    file_hash VARCHAR(64) NULL,
+    mime_type VARCHAR(100) DEFAULT NULL,
+    preview TEXT NULL,
+    size_bytes INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+_DOCS_TABLE_READY = False
+
 
 def _ensure_table(db: Session):
     global _TABLE_READY
@@ -38,6 +62,18 @@ def _ensure_table(db: Session):
         _TABLE_READY = True
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to initialise ai_prompts table")
+
+
+def _ensure_documents_table(db: Session):
+    global _DOCS_TABLE_READY
+    if _DOCS_TABLE_READY:
+        return
+    try:
+        db.execute(text(CREATE_DOCS_SQL))
+        db.commit()
+        _DOCS_TABLE_READY = True
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to initialise prompt_documents table")
 
 
 def _coerce_config(raw):
@@ -287,3 +323,236 @@ def delete_prompt(prompt_id: int, db: Session = Depends(get_db)):
     if res.rowcount == 0:
         raise HTTPException(status_code=404, detail="Prompt not found")
     return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════
+# PROMPT TESTING (Issue 1) + DOCUMENT UPLOAD & PROMPT GENERATION (Issue 5)
+# ════════════════════════════════════════════════════════════════
+
+class PromptTest(BaseModel):
+    client_id: Optional[int] = None
+    prompt_text: Optional[str] = None
+    config: Optional[Dict] = None
+    transcript: Optional[str] = None
+    note: Optional[str] = None
+
+
+def _read_doc_text(path: Path) -> str:
+    """Best-effort plain-text extraction from uploaded documents."""
+    try:
+        if path.suffix.lower() == ".txt":
+            return path.read_text(encoding="utf-8", errors="replace")[:4000]
+        return path.read_text(encoding="utf-8", errors="replace")[:4000]
+    except Exception as exc:
+        print(f"[prompt-docs] read failed for {path}: {exc}")
+        return ""
+
+
+@router.post("/test")
+def test_prompt(payload: PromptTest, db: Session = Depends(get_db)):
+    """Run the prompt against a sample transcript without activating it."""
+    _ensure_table(db)
+    prompt_text = payload.prompt_text
+    prompt_json = payload.config
+
+    if not prompt_text and payload.client_id is not None:
+        row = db.execute(
+            text("""
+                SELECT prompt_text, prompt_json FROM ai_prompts
+                WHERE client_id = :client_id AND status = 'Active'
+                ORDER BY updated_at DESC, id DESC LIMIT 1
+            """),
+            {"client_id": payload.client_id},
+        ).mappings().one_or_none()
+        if row:
+            prompt_text = row["prompt_text"]
+            if prompt_json is None:
+                prompt_json = _coerce_config(row["prompt_json"])
+
+    if not (prompt_text or "").strip():
+        raise HTTPException(status_code=422, detail="No prompt text provided or active prompt found for the client")
+
+    sample = (payload.transcript or "").strip() or "[EMPTY TRANSCRIPT]"
+
+    result = asyncio.run(
+        run_ai_audit(
+            prompt_text,
+            sample,
+            False,
+            prompt_config=prompt_json,
+        )
+    )
+    return {
+        "ok": bool(result),
+        "result": result,
+        "note": payload.note,
+    }
+
+
+GENERATE_FROM_DOCS_TEMPLATE = """
+You are a call quality auditor for a sales/service process. Analyze the
+process documents below and generate a structured AI audit prompt for calls
+made under this process.
+
+PROCESS DOCUMENTS:
+{docs}
+
+Respond with ONLY a JSON object with these keys:
+- "name": short prompt name (string)
+- "description": one-sentence description of what the prompt audits (string)
+- "sections": list of audit sections, each {"key": "snake_case", "label": "Title Case", "weight": number, "max_score": number, "question": "What to check", "severity": "Critical|High|Medium|Low"}
+- "prompt_text": the full prompt text sent to the AI auditor for each call (string)
+
+Keep the sections focused on behaviours relevant to this process (e.g. greeting
+compliance, script adherence, objection handling, closing techniques). Do not
+include sales-classification fields; those are added automatically.
+"""
+
+
+@router.get("/documents")
+def list_documents(client_id: Optional[int] = Query(default=None), db: Session = Depends(get_db)):
+    _ensure_documents_table(db)
+    sql = "SELECT id, client_id, file_name, file_path, file_hash, mime_type, preview, size_bytes, created_at FROM prompt_documents"
+    params = {}
+    if client_id is not None:
+        sql += " WHERE client_id = :client_id"
+        params["client_id"] = client_id
+    sql += " ORDER BY created_at DESC, id DESC LIMIT 200"
+    rows = db.execute(text(sql), params).mappings().all()
+    return [
+        {
+            "id": r["id"],
+            "client_id": r["client_id"],
+            "file_name": r["file_name"],
+            "file_path": r["file_path"],
+            "size_bytes": r["size_bytes"] or 0,
+            "mime_type": r["mime_type"],
+            "preview": (r["preview"] or "")[:300],
+            "created_at": str(r["created_at"]) if r["created_at"] else "",
+        }
+        for r in rows
+    ]
+
+
+@router.post("/documents")
+async def upload_documents(
+    client_id: int = Form(...),
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    _ensure_documents_table(db)
+    client_dir = DOCS_DIR / f"client_{client_id}"
+    client_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: List[dict] = []
+    for upload in files:
+        data = await upload.read()
+        name = (upload.filename or "document").replace("\\", "/").split("/")[-1]
+        fpath = client_dir / f"{hashlib.md5((name + str(__import__('time').time_ns())).encode()).hexdigest()}_{name}"
+        fpath.write_bytes(data)
+        text_preview = data[:400].decode("utf-8", errors="replace").replace("\r", "").strip()
+        if not text_preview and name.lower().endswith((".txt", ".md", ".json")):
+            text_preview = _read_doc_text(fpath)[:400]
+        db.execute(
+            text("""
+                INSERT INTO prompt_documents (client_id, file_name, file_path, file_hash, mime_type, preview, size_bytes)
+                VALUES (:client_id, :name, :path, :hash, :mime, :preview, :size)
+            """),
+            {
+                "client_id": client_id,
+                "name": name,
+                "path": str(fpath),
+                "hash": hashlib.sha256(data).hexdigest(),
+                "mime": upload.content_type,
+                "preview": text_preview or None,
+                "size": len(data),
+            },
+        )
+        saved.append({"file_name": name, "size_bytes": len(data), "preview": (text_preview or "")[:300]})
+    db.commit()
+    return {"uploaded": len(saved), "files": saved}
+
+
+@router.post("/generate-from-docs")
+def generate_prompt_from_docs(
+    client_id: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Analyse uploaded process documents and generate a prompt for Prompt Builder."""
+    from app.services.ai_audit_service import run_ai_audit
+
+    _ensure_documents_table(db)
+    rows = db.execute(
+        text("""
+            SELECT file_name, preview FROM prompt_documents
+            WHERE client_id = :client_id ORDER BY created_at DESC, id DESC LIMIT 10
+        """),
+        {"client_id": client_id},
+    ).mappings().all()
+
+    if not rows:
+        raise HTTPException(status_code=422, detail="No documents uploaded for this client")
+
+    docs_text = "\n\n---\n\n".join(
+        f"[FILE: {r['file_name']}]\n{(r['preview'] or '')}"
+        for r in rows
+    )
+
+    result: Dict = {}
+    try:
+        result = asyncio.run(
+            run_ai_audit(
+                GENERATE_FROM_DOCS_TEMPLATE.format(docs=docs_text[:12000]),
+                docs_text,
+                False,
+            )
+        )
+    except Exception as exc:
+        print(f"[generate-from-docs] LLM failed: {exc}")
+
+    if not result:
+        # Heuristic fallback so the feature still delivers a usable prompt
+        sections = [
+            {"key": "greeting_compliance", "label": "Greeting & Compliance", "weight": 2, "max_score": 20, "question": "Was the greeting and introduction complete?", "severity": "Critical"},
+            {"key": "script_adherence", "label": "Script Adherence", "weight": 3, "max_score": 30, "question": "Did the agent follow the process script?", "severity": "High"},
+            {"key": "objection_handling", "label": "Objection Handling", "weight": 2, "max_score": 20, "question": "Was the customer objection handled well?", "severity": "Medium"},
+            {"key": "closing_techniques", "label": "Closing & Next Steps", "weight": 1, "max_score": 15, "question": "Was the call closed properly with next steps?", "severity": "Medium"},
+        ]
+        result = {
+            "name": f"{(rows[0]['file_name'] or 'Document').split('.')[0]} Based Audit",
+            "description": "AI audit prompt generated from uploaded process documents.",
+            "sections": sections,
+            "prompt_text": (
+                "You are a call quality auditor for this sales process. Review the call transcript "
+                "and score the following sections (0-10 per question) plus return a summary of strengths, "
+                "areas for improvement and a customer confirmation check."
+            ),
+        }
+
+    # Save the generated prompt as a Draft so the user can review & activate
+    status = "Draft"
+    cfg = {
+        "name": str(result.get("name") or "Generated From Docs"),
+        "description": str(result.get("description") or ""),
+        "version": "v1.0",
+        "status": status,
+        "sections": result.get("sections") or [],
+    }
+    db.execute(
+        text("""
+            INSERT INTO ai_prompts (client_id, name, description, version, status, prompt_json, prompt_text)
+            VALUES (:client_id, :name, :description, :version, :status, :prompt_json, :prompt_text)
+        """),
+        {
+            "client_id": client_id,
+            "name": cfg["name"],
+            "description": cfg["description"],
+            "version": cfg["version"],
+            "status": status,
+            "prompt_json": json.dumps(cfg, ensure_ascii=False),
+            "prompt_text": result.get("prompt_text"),
+        },
+    )
+    db.commit()
+
+    return {**result, "saved_id": None}

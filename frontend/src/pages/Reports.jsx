@@ -1,8 +1,9 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Card, SectionTitle } from '../components/shared.jsx'
 import { FileText, Download, Loader2, Clock, CheckCircle, Mail, Calendar, Filter, AlertTriangle } from 'lucide-react'
 import { useClientFilter } from '../components/ClientContext.jsx'
-import { exportClientWiseReport, exportAgentWiseReport, exportAuditsReport } from '../api/client.js'
+import { exportClientWiseReport, exportAgentWiseReport, exportAuditsReport, triggerPipeline, getPipelineStatus } from '../api/client.js'
+import { Zap, RefreshCw, BarChart3 } from 'lucide-react'
 
 const TYPES = [
   { name: 'Detailed Audit Records', icon: FileText, desc: 'Call-level audit export with scores, sale status and reasons', export: 'audits' },
@@ -28,6 +29,34 @@ export default function Reports() {
   const [invalidReason, setInvalidReason] = useState('')
 
   const [error, setError] = useState(null)
+
+  // Issue 6: live data — trigger the fetch/STT/audit pipeline on demand
+  const [pipelineRunning, setPipelineRunning] = useState(false)
+  const [pipelineResult, setPipelineResult] = useState(null)
+  const [pipelineStatus, setPipelineStatus] = useState(null)
+
+  const refreshPipelineStatus = async () => {
+    try {
+      const st = await getPipelineStatus({ client_id: clientId && clientId !== 'all' ? Number(clientId) : null })
+      setPipelineStatus(st)
+    } catch { /* ignore */ }
+  }
+  useEffect(() => { refreshPipelineStatus() }, [clientId])
+
+  const runPipeline = async () => {
+    setPipelineRunning(true)
+    setPipelineResult(null)
+    try {
+      const res = await triggerPipeline({ client_id: clientId && clientId !== 'all' ? Number(clientId) : null, limit: 50 })
+      setPipelineResult(res)
+      setTimeout(refreshPipelineStatus, 1500)
+    } catch (e) {
+      setPipelineResult({ errors: [e?.response?.data?.detail || e?.message || 'Pipeline trigger failed'] })
+    } finally {
+      setPipelineRunning(false)
+      setTimeout(refreshPipelineStatus, 2000)
+    }
+  }
 
   const generate = async () => {
     setLoading(true); setDone(false); setError(null)
@@ -57,6 +86,44 @@ export default function Reports() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold text-[#1D2433]">Reports</h1>
+
+      {/* Live Data — Issue 6: fetch/STT/audit pipeline */}
+      <Card>
+        <SectionTitle>Live Data — Run Audit Pipeline</SectionTitle>
+        <div className="flex flex-wrap items-center gap-4">
+          <button
+            onClick={runPipeline}
+            disabled={pipelineRunning}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#3457D5] text-white text-sm font-semibold hover:bg-[#2a45b0] transition disabled:opacity-60"
+          >
+            {pipelineRunning ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
+            {pipelineRunning ? 'Running...' : 'Run Fetch + STT + Audit'}
+          </button>
+          <div className="text-xs text-[#6B7385] flex items-center gap-1.5">
+            {pipelineStatus ? (
+              <>
+                <BarChart3 size={12} className="text-[#3457D5]" />
+                Calls: <span className="font-bold text-[#1D2433]">{pipelineStatus.calls}</span>
+                {' · '}Audited: <span className="font-bold text-[#1C9A6C]">{pipelineStatus.audited_calls}</span>
+                {' · '}Avg %: <span className="font-bold text-[#C9862B]">{pipelineStatus.avg_percentage}</span>
+                {pipelineStatus.fatal_calls > 0 && <span className="text-[#D14343]"> · {pipelineStatus.fatal_calls} fatal</span>}
+              </>
+            ) : 'Loading pipeline status...'}
+          </div>
+          <div className="ml-auto flex items-center gap-1 text-[10px] text-[#6B7385]">
+            <RefreshCw size={10} className="text-[#3457D5] animate-spin" /> Live
+          </div>
+        </div>
+        {pipelineResult && (
+          <div className={`mt-3 text-xs font-semibold px-3 py-2 rounded-xl ${pipelineResult.errors?.length ? 'bg-[#FBE9E9] text-[#D14343]' : 'bg-[#E7F7EF] text-[#1C9A6C]'}`}>
+            {pipelineResult.errors?.length ? (
+              <div><div>Pipeline errors:</div><div className="mt-1">{pipelineResult.errors.join(' | ')}</div></div>
+            ) : (
+              <div>Pipeline result: fetch={pipelineResult.stages?.fetch ?? '-'}, stt={pipelineResult.stages?.stt ?? '-'}, audit={pipelineResult.stages?.audit ?? '-'}</div>
+            )}
+          </div>
+        )}
+      </Card>
 
       <div className="grid grid-cols-3 gap-6">
         <Card className="col-span-2">

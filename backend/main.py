@@ -5,8 +5,8 @@ from app.core.config import get_settings
 from app.database import engine
 from app.routers import kpis, conversation, calls, agents, incidents, alerts, settings as settings_router, client_overview, ai_prompts, auth, client_settings,auth
 from app.routers import reports
-from app.routers import reports
-from app.routers import reports
+from app.routers import smartping
+from app.routers import ops
 from app.routers import agents
 
 app_settings = get_settings()
@@ -48,6 +48,8 @@ app.include_router(incidents.router)
 app.include_router(alerts.router)
 app.include_router(settings_router.router)
 app.include_router(ai_prompts.router)
+app.include_router(smartping.router)
+app.include_router(ops.router)
 app.include_router(auth.router)
 app.include_router(client_overview.router)
 app.include_router(client_overview.clients_router)

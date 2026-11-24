@@ -42,3 +42,4 @@ class Setting(Base):
     monthly_max = Column(Integer, default=60)    # ← NEW
     daily_target = Column(Integer, default=1)
     daily_max = Column(Integer, default=3)       # ← NEW
+    audit_mode = Column(String(20), default='monthly')  # ← NEW (persisted mode)

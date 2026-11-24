@@ -13,7 +13,9 @@ import { validatePrompt, assemblePrompt } from './logic.js'
 import { Field, TextInput, Select } from './ui.jsx'
 import {
   listClients, listAiPrompts, getAiPrompt, createAiPrompt, updateAiPrompt, activateAiPrompt, deleteAiPrompt,
+  testAiPrompt, listPromptDocuments, uploadPromptDocuments, generatePromptFromDocs,
 } from '../../api/client.js'
+import { BookText, PlayCircle } from 'lucide-react'
 import {
   Save, Copy, Check, FileText, ScrollText, ListOrdered, ShieldX, ShieldAlert,
   ScanSearch, Braces, Wand2, GitBranch, ChevronRight, Layers, Upload,
@@ -38,6 +40,96 @@ export default function PromptBuilder() {
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
   const [promptStatus, setPromptStatus] = useState('')
+
+  // Issue 1 & 5: prompt testing + document upload
+  const [docs, setDocs] = useState([])
+  const [testTranscript, setTestTranscript] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [generating, setGenerating] = useState(false)
+
+  const loadDocs = useCallback(() => {
+    if (!clientId) return
+    listPromptDocuments(Number(clientId))
+      .then((res) => setDocs(Array.isArray(res) ? res : (res?.files || [])))
+      .catch(() => setDocs([]))
+  }, [clientId])
+
+  useEffect(() => { setTestResult(null); loadDocs() }, [loadDocs])
+
+  const handleTestPrompt = async () => {
+    if (!clientId) {
+      notify('Choose a client first.', 'err')
+      return
+    }
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await testAiPrompt({
+        client_id: Number(clientId),
+        prompt_text: assemblePrompt(config),
+        config,
+        transcript: testTranscript.trim() || undefined,
+        note: 'Live test — not saved.',
+      })
+      setTestResult({ ok: !!res?.ok, result: res?.result || {}, note: res?.note })
+      if (!res?.ok) notify('Test completed with empty/invalid result — check LLM configuration', 'err')
+    } catch (e) {
+      setTestResult({ ok: false, error: e?.response?.data?.detail || e?.message, result: {} })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const handleUploadDocs = async (e) => {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!clientId || files.length === 0) return
+    setUploading(true)
+    try {
+      await uploadPromptDocuments(Number(clientId), files)
+      notify(`Uploaded ${files.length} document(s). Generate a prompt from them or upload more.`)
+      loadDocs()
+    } catch (err) {
+      notify(err?.response?.data?.detail || 'Upload failed', 'err')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleGenerateFromDocs = async () => {
+    if (!clientId) { notify('Choose a client first.', 'err'); return }
+    setGenerating(true)
+    try {
+      const res = await generatePromptFromDocs(Number(clientId))
+      setConfig((c) => ({
+        ...c,
+        name: res.name || c.name,
+        description: res.description || c.description,
+        status: c.status || 'Draft',
+      }))
+      if (res.sections?.length) {
+        const first = res.sections[0] || {}
+        setConfig((c) => ({
+          ...c,
+          parameters: [{
+            id: uid(), name: first.key || 'Greeting & Compliance',
+            questions: [{ id: uid(), name: first.question || 'Was the greeting complete?', criteria: '', weight: 2 }],
+          }],
+        }))
+      }
+      if (res.prompt_text) {
+        setConfig((c) => ({ ...c, prompt_text: res.prompt_text }))
+        notify(`Generated prompt "${res.name || 'From Documents'}" from ${docs.length || 'uploaded'} document(s).`)
+        refreshPrompts()
+      }
+    } catch (err) {
+      notify(err?.response?.data?.detail || 'Generation failed', 'err')
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   const val = useMemo(() => validatePrompt(config), [config])
 
@@ -401,6 +493,109 @@ export default function PromptBuilder() {
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Issue 5: Step-by-step guidance */}
+      <div className="bg-white border border-[#E7E2D8] rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-7 h-7 rounded-lg bg-[#EEF1FE] flex items-center justify-center text-[#3457D5]"><ListOrdered size={14} /></div>
+          <div className="text-sm font-bold text-[#1D2433]">Prompt Creation — Step by Step</div>
+        </div>
+        <ol className="space-y-3">
+          {[
+            { step: 1, title: 'Upload process documents', desc: 'SOPs, FAQs and guidelines (PDF / TXT). They power automatic prompt generation (Process tab).' },
+            { step: 2, title: 'Generate from documents (optional)', desc: 'Click "Generate prompt from documents" and review the generated name, description and sections.' },
+            { step: 3, title: 'Configure the prompt', desc: 'Tune preamble, parameters, fatal/hard rules and output schema to match your process.' },
+            { step: 4, title: 'Test the prompt (Issue 1)', desc: 'Use a sample transcript or record one — run Test to see the generated audit output before activating.' },
+            { step: 5, title: 'Save, then Activate', desc: 'Save as Draft/Published, review, then Set as Active so the audit service uses it for real calls.' },
+          ].map((s) => (
+            <li key={s.step} className="flex gap-3 items-start">
+              <span className="w-6 h-6 rounded-full bg-[#16213E] text-white flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">{s.step}</span>
+              <div>
+                <div className="text-xs font-semibold text-[#1D2433]">{s.title}</div>
+                <div className="text-[10px] text-[#6B7385]">{s.desc}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {/* Issue 1 & 5: Documents + Test */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div className="bg-white border border-[#E7E2D8] rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-7 h-7 rounded-lg bg-[#FFF7ED] flex items-center justify-center text-[#C9862B]"><BookText size={14} /></div>
+            <div className="text-sm font-bold text-[#1D2433]">Process Documents ({docs.length})</div>
+          </div>
+          <input
+            type="file"
+            multiple
+            accept=".txt,.md,.pdf,.doc,.docx,.json"
+            onChange={handleUploadDocs}
+            className="hidden"
+            id="prompt-doc-upload"
+          />
+          <label htmlFor="prompt-doc-upload"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-[#C9862B]/50 bg-[#FFF7ED] cursor-pointer hover:border-[#C9862B] transition text-xs font-semibold text-[#C9862B] mb-3">
+            <Upload size={13} /> Upload SOP/FAQ documents
+          </label>
+          <button
+            onClick={handleGenerateFromDocs}
+            disabled={generating || !clientId || docs.length === 0}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#16213E] text-white text-xs font-semibold hover:bg-[#1B3157] transition disabled:opacity-50"
+          >
+            {generating ? <Loader2 size={13} className="animate-spin" /> : <BookText size={13} />}
+            Generate prompt from documents
+          </button>
+          <div className="max-h-36 overflow-y-auto mt-3 space-y-1">
+            {docs.length === 0 && <div className="text-[10px] text-[#6B7385]">No documents uploaded yet — upload an SOP or FAQ to get a process-specific prompt.</div>}
+            {docs.map((d) => (
+              <div key={d.id} className="flex items-center gap-2 text-xs text-[#1D2433] border border-[#E7E2D8] rounded-lg px-2.5 py-1.5">
+                <FileText size={12} className="text-[#3457D5]" />
+                <span className="font-medium">{d.file_name}</span>
+                <span className="text-[10px] text-[#6B7385] ml-auto">{d.size_bytes ? `${(d.size_bytes / 1024).toFixed(0)} KB` : ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white border border-[#E7E2D8] rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-7 h-7 rounded-lg bg-[#E7F7EF] flex items-center justify-center text-[#1C9A6C]"><PlayCircle size={14} /></div>
+            <div className="text-sm font-bold text-[#1D2433]">Prompt Testing</div>
+          </div>
+          <textarea
+            value={testTranscript}
+            onChange={(e) => setTestTranscript(e.target.value)}
+            placeholder="Paste a sample call transcript to test the prompt..."
+            className="w-full px-3 py-2 rounded-xl border border-[#E7E2D8] text-xs resize-none h-24 focus:outline-none focus:ring-2 focus:ring-[#3457D5]/30"
+          />
+          <div className="flex gap-2 mt-3">
+            <button
+              onClick={handleTestPrompt}
+              disabled={testing || !clientId || !assemblePrompt(config).trim()}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#3457D5] text-white text-xs font-semibold hover:bg-[#2a45b0] transition disabled:opacity-50"
+            >
+              {testing ? <Loader2 size={13} className="animate-spin" /> : <PlayCircle size={13} />}
+              Run Test
+            </button>
+          </div>
+          {testResult && (
+            <div className="mt-4 space-y-2">
+              {testResult.error && <div className="text-xs text-[#D14343] font-semibold">Error: {testResult.error}</div>}
+              {testResult.result && Object.keys(testResult.result).length > 0 && (
+                <div className="text-xs text-[#1D2433]">
+                  <div className="font-semibold mb-1">Output:</div>
+                  <pre className="bg-[#F7F4EE] rounded-lg p-2 text-[10px] overflow-x-auto whitespace-pre-wrap max-h-40">{JSON.stringify(testResult.result, null, 2)}</pre>
+                </div>
+              )}
+              {testResult.result?.summary && (
+                <div className="text-xs text-[#1D2433]"><span className="font-semibold">Summary:</span> {testResult.result.summary}</div>
+              )}
+              {testResult.note && <div className="text-[10px] text-[#6B7385]">{testResult.note}</div>}
+            </div>
+          )}
         </div>
       </div>
 

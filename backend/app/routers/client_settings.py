@@ -224,6 +224,9 @@ def _settings_response(
             "enable_sales_category_filter": int(getattr(settings, "enable_sales_category_filter", 0) or 0),
             "sales_interested_values": sales_interested or [],
             "sales_not_interested_values": sales_not_interested or [],
+            "audit_mode": getattr(settings, "audit_mode", None) or "monthly",
+            "monthly_max": getattr(settings, "monthly_max", None) or 60,
+            "daily_max": getattr(settings, "daily_max", None) or 3,
         }
 
     return {
@@ -251,6 +254,9 @@ def _settings_response(
         "enable_sales_category_filter": 0,
         "sales_interested_values": [],
         "sales_not_interested_values": [],
+        "audit_mode": "monthly",
+        "monthly_max": 60,
+        "daily_max": 3,
     }
 
 

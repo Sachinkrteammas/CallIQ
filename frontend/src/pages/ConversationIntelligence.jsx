@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Card, SectionTitle, Sparkline, Trend, SeverityBadge, EmptyState } from '../components/shared.jsx'
 import { DISTRIBUTION, HEATMAP, AI_FINDINGS, TREND_DATA } from '../data/mock.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
-import { getClientVADMetrics, triggerVADProcessing, getFindings } from '../api/client.js'
+import { getClientVADMetrics, triggerVADProcessing, getFindings, getHeatmap } from '../api/client.js'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, LineChart, Line, BarChart, Bar,
@@ -61,6 +61,20 @@ export default function ConversationIntelligence() {
 
   const [findings, setFindings] = useState([])
   const [findingsLoading, setFindingsLoading] = useState(false)
+  const [heatmap, setHeatmap] = useState(null)
+
+  const fetchHeatmap = useCallback(() => {
+    getHeatmap()
+      .then((res) => setHeatmap(res || null))
+      .catch(() => setHeatmap(null))
+  }, [])
+
+  useEffect(() => {
+    fetchHeatmap()
+  }, [fetchHeatmap])
+
+  const heatmapRows = heatmap?.rows || HEATMAP.rows
+  const heatmapBehaviours = heatmap?.behaviours || HEATMAP.behaviours
 
   // Fetch VAD metrics from the real API when client or dates change
   const fetchVADMetrics = useCallback(() => {
@@ -487,16 +501,16 @@ export default function ConversationIntelligence() {
             <thead>
               <tr>
                 <th className="text-left text-[#6B7385] font-semibold p-2 w-40 capitalize">{heatmapView}</th>
-                {HEATMAP.behaviours.map((b) => (
+                {heatmapBehaviours.map((b) => (
                   <th key={b} className="text-[#6B7385] font-semibold p-2 text-center whitespace-nowrap">{b}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {HEATMAP.rows.map((row) => (
+              {heatmapRows.map((row) => (
                 <tr key={row.team}>
                   <td className="p-2 font-semibold text-[#1D2433]">{row.team}</td>
-                  {HEATMAP.behaviours.map((b) => {
+                  {heatmapBehaviours.map((b) => {
                     const level = row.cells[b]
                     const key = `${row.team}-${b}`
                     return (

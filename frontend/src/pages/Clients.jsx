@@ -35,7 +35,15 @@ export default function Clients() {
 
   const [showModal, setShowModal] = useState(false)
   const [modalMode, setModalMode] = useState('add')
+  const [campaignChips, setCampaignChips] = useState([])
   const [form, setForm] = useState({ ...EMPTY_FORM })
+
+  const toggleCampaign = (name) => {
+    const q = (name || '').trim()
+    if (!q) return
+    setCampaignChips((prev) => prev.includes(q) ? prev.filter((c) => c !== q) : [...prev, q])
+  }
+  const syncCampaignsFromChips = (chips) => setForm((f) => ({ ...f, campaigns: chips.join(', ') }))
   const [editId, setEditId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [cdrSources, setCdrSources] = useState([])
@@ -114,6 +122,7 @@ export default function Clients() {
   }
 
   const openEdit = (client) => {
+    setCampaignChips(((client.campaigns || '').split(',').map((s) => s.trim()).filter(Boolean)))
     setForm({
       name: client.name || '',
       email: client.email || '',
@@ -150,6 +159,7 @@ export default function Clients() {
       showToast('Client name is required', 'error')
       return
     }
+    syncCampaignsFromChips(campaignChips)
     setSaving(true)
     try {
       if (modalMode === 'edit' && editId) {
@@ -451,10 +461,45 @@ export default function Clients() {
 
               <div className="border-t border-[#E7E2D8] pt-4">
                 <h3 className="text-xs font-semibold text-[#6B7385] uppercase tracking-wider mb-3">Campaigns & Groups</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <InputField label="Campaigns" value={form.campaigns} onChange={v => setForm(f => ({ ...f, campaigns: v }))} placeholder="Comma-separated campaigns" />
-                  <InputField label="Ingroups" value={form.ingroups} onChange={v => setForm(f => ({ ...f, ingroups: v }))} placeholder="Comma-separated ingroups" />
+                <div className="mb-2">
+                  <label className="block text-xs font-semibold text-[#1D2433] mb-1">
+                    Selected Campaigns ({campaignChips.length})
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 min-h-[34px]">
+                    {campaignChips.map((q) => (
+                      <span key={q} className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#EEF1FE] text-[#3457D5] text-xs font-medium border border-[#3457D5]/20">
+                        {q}
+                        <button type="button" aria-label={`Remove ${q}`} onClick={() => toggleCampaign(q)} className="hover:text-[#D14343]">
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                    {campaignChips.length === 0 && (
+                      <span className="text-xs text-[#6B7385]">Nothing selected yet</span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-[#6B7385] mt-1">Tap to select multiple campaigns for this client</p>
                 </div>
+                {cdrSources.length > 0 && (
+                  <div className="mb-2">
+                    <label className="block text-xs font-semibold text-[#1D2433] mb-1">Add from SmartPing queues</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {cdrSources.slice(0, 12).map((s) => (
+                        <label key={s.queue_name} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer transition-all ${campaignChips.includes(s.queue_name) ? 'border-[#3457D5] bg-[#EEF1FE]' : 'border-[#E7E2D8]'}`}>
+                          <input
+                            type="checkbox"
+                            checked={campaignChips.includes(s.queue_name)}
+                            onChange={() => toggleCampaign(s.queue_name)}
+                            className="accent-[#3457D5]"
+                          />
+                          <span className="text-[#1D2433] truncate" title={s.queue_name}>{s.queue_name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <InputField label="Campaigns (comma-separated)" value={form.campaigns} onChange={v => setForm(f => ({ ...f, campaigns: v }))} placeholder="e.g. Q2_CART, RETURN_PROMO" />
+                <InputField label="Ingroups" value={form.ingroups} onChange={v => setForm(f => ({ ...f, ingroups: v }))} placeholder="Comma-separated ingroups" />
               </div>
             </div>
 

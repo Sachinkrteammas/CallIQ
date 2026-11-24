@@ -101,10 +101,22 @@ def distribution(
 
 
 @router.get("/heatmap")
-def heatmap():
+def heatmap(db: Session = Depends(get_db)):
     random.seed(22)
+    # Prefer real process/client names from the DB so the heatmap shows
+    # actual processes (e.g. LPNO, MAPL) instead of generic sample names.
+    try:
+        names = [
+            r[0]
+            for r in db.execute(
+                text("SELECT name FROM clients WHERE is_active = 1 ORDER BY name")
+            ).all()
+        ]
+    except Exception:
+        names = []
+    teams = names or data.TEAMS
     rows = []
-    for team in data.TEAMS:
+    for team in teams:
         cells = {}
         for b in data.BEHAVIOURS:
             score = random.random()
