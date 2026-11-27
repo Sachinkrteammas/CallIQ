@@ -32,6 +32,8 @@ export default function PipelineRunStatus({ runId, pollMs = 2000, onComplete }) 
   const [error, setError] = useState(null)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [now, setNow] = useState(Date.now())
+  const [reloadKey, setReloadKey] = useState(0)
+  const [stalled, setStalled] = useState(false)
   const onCompleteRef = useRef(onComplete)
 
   useEffect(() => { onCompleteRef.current = onComplete }, [onComplete])
@@ -40,6 +42,18 @@ export default function PipelineRunStatus({ runId, pollMs = 2000, onComplete }) 
     if (!runId) return undefined
     let cancelled = false
     let timer = null
+    const startedAt = Date.now()
+    setStalled(false)
+
+    // Back off when a server-side stage takes a long time (e.g. the fetch
+    // worker waiting on a remote DB) instead of hammering the run endpoint.
+    const nextDelay = () => {
+      const elapsed = Date.now() - startedAt
+      if (elapsed > 10 * 60 * 1000) return null
+      if (elapsed > 60 * 1000) return 10000
+      if (elapsed > 20 * 1000) return 5000
+      return pollMs
+    }
 
     const refresh = async () => {
       try {
@@ -54,12 +68,13 @@ export default function PipelineRunStatus({ runId, pollMs = 2000, onComplete }) 
           if (onCompleteRef.current) onCompleteRef.current(data)
           return
         }
-        timer = window.setTimeout(refresh, pollMs)
       } catch (e) {
         if (cancelled) return
         setError('Status unavailable — retrying…')
-        timer = window.setTimeout(refresh, Math.max(pollMs, 3000))
       }
+      const delay = nextDelay()
+      if (delay === null) setStalled(true)
+      else timer = window.setTimeout(refresh, Math.max(delay, 3000))
     }
 
     refresh()
@@ -67,7 +82,7 @@ export default function PipelineRunStatus({ runId, pollMs = 2000, onComplete }) 
       cancelled = true
       if (timer) window.clearTimeout(timer)
     }
-  }, [runId, pollMs])
+  }, [runId, pollMs, reloadKey])
 
   useEffect(() => {
     const tick = window.setInterval(() => setNow(Date.now()), 1000)
@@ -104,10 +119,18 @@ export default function PipelineRunStatus({ runId, pollMs = 2000, onComplete }) 
           </span>
           <span className="text-[10px] text-[#6B7385]">· Run #{runId}</span>
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-medium text-[#6B7385]">
-          {running && <span className="w-1.5 h-1.5 rounded-full bg-[#1C9A6C] animate-pulse" />}
-          {updatedLabel}
-          <RefreshCw size={10} className={running ? 'animate-spin' : ''} />
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium text-[#6B7385]">
+            {running && !stalled && <span className="w-1.5 h-1.5 rounded-full bg-[#1C9A6C] animate-pulse" />}
+            {updatedLabel}
+            {running && !stalled && <RefreshCw size={10} className="animate-spin" />}
+          </div>
+          {(stalled || error) && (
+            <button type="button" onClick={() => setReloadKey((k) => k + 1)}
+              className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg border border-[#3457D5]/40 text-[#3457D5] hover:bg-[#EEF1FE]">
+              <RefreshCw size={10} /> Refresh
+            </button>
+          )}
         </div>
       </div>
 
@@ -141,6 +164,12 @@ export default function PipelineRunStatus({ runId, pollMs = 2000, onComplete }) 
         <div className="mt-2 text-[11px] text-[#D14343] break-words">{run.error}</div>
       )}
       {error && <div className="mt-2 text-[11px] text-[#C9862B]">{error}</div>}
+      {stalled && (
+        <div className="mt-2 text-[11px] text-[#C9862B]">
+          Pipeline is taking longer than expected (the server may be waiting on a database).
+          Check the backend logs, then refresh or activate again.
+        </div>
+      )}
     </div>
   )
 }

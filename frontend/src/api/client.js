@@ -226,7 +226,9 @@ export const getPipelineStatus = (params = {}) => api.get('/ops/pipeline/status'
 
 export const getClientSettings = async (clientId) => {
   try {
-    const res = await api.get(`/client-settings/${clientId}`)
+    // A slow/unreachable secondary DB on the server must not leave the form
+    // stuck in "loading" forever.
+    const res = await api.get(`/client-settings/${clientId}`, { timeout: 20000 })
     return res.data
   } catch (err) {
     if (err.response?.status === 404) return null

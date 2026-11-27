@@ -845,7 +845,7 @@ export default function PromptBuilder() {
             <div className="w-7 h-7 rounded-lg bg-[#E7F7EF] flex items-center justify-center text-[#1C9A6C]"><PlayCircle size={14} /></div>
             <div>
               <div className="text-sm font-bold text-[#1D2433]">Prompt Testing</div>
-              <div className="text-[10px] text-[#6B7385]">A successful test is required before activation.</div>
+              <div className="text-[10px] text-[#6B7385]">Testing is optional — you can save and activate at any time.</div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 mb-3">

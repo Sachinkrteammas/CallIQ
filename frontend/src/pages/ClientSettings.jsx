@@ -334,7 +334,7 @@ export default function ClientSettings() {
     <div className="flex flex-col gap-1">
       <label className="text-[10px] font-semibold text-[#6B7385] uppercase">{label}</label>
       <select
-        disabled={settingsLoading}
+       
         className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3457D5]/30"
         value={form[key]}
         onChange={(e) => setForm((p) => ({ ...p, [key]: Number(e.target.value) }))}
@@ -437,6 +437,9 @@ export default function ClientSettings() {
           </div>
         ) : (
           <>
+            {settingsLoading && (
+              <div className="mb-3 text-[10px] font-semibold text-[#6B7385]">Loading saved settings… (fields stay editable)</div>
+            )}
             {notice && (
               <div className={`mb-4 text-xs font-semibold px-3 py-2 rounded-xl ${
                 notice.type === 'success' ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#FBE9E9] text-[#D14343]'
@@ -468,7 +471,7 @@ export default function ClientSettings() {
                       <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
                         Monthly Min Target
                       </label>
-                      <input type="number" disabled={settingsLoading}
+                      <input type="number"
                         className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
                         value={form.monthly_target}
                         onChange={(e) => setForm((p) => ({ ...p, monthly_target: Number(e.target.value) || 0 }))} />
@@ -477,7 +480,7 @@ export default function ClientSettings() {
                       <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
                         Monthly Max Target
                       </label>
-                      <input type="number" disabled={settingsLoading}
+                      <input type="number"
                         className={`rounded-xl border bg-white px-3 py-2 text-sm ${
                           maxExceeded ? 'border-[#D14343]' : 'border-[#E7E2D8]'
                         }`}
@@ -491,7 +494,7 @@ export default function ClientSettings() {
                       <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
                         Daily Min Target
                       </label>
-                      <input type="number" disabled={settingsLoading}
+                      <input type="number"
                         className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
                         value={form.daily_target}
                         onChange={(e) => setForm((p) => ({ ...p, daily_target: Number(e.target.value) || 0 }))} />
@@ -500,7 +503,7 @@ export default function ClientSettings() {
                       <label className="text-[10px] font-semibold text-[#6B7385] uppercase">
                         Daily Max Target
                       </label>
-                      <input type="number" disabled={settingsLoading}
+                      <input type="number"
                         className={`rounded-xl border bg-white px-3 py-2 text-sm ${
                           maxExceeded ? 'border-[#D14343]' : 'border-[#E7E2D8]'
                         }`}
@@ -532,7 +535,7 @@ export default function ClientSettings() {
             <div className="mb-6 p-4 rounded-xl bg-[#EEF1FE] border border-[#3457D5]/20">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <h3 className="text-xs font-bold text-[#1D2433] uppercase">2. Call Duration Distribution</h3>
-                <button type="button" onClick={syncDurationsToTarget} disabled={settingsLoading}
+                <button type="button" onClick={syncDurationsToTarget}
                   className="text-[10px] font-semibold px-2.5 py-1 rounded-lg bg-white border border-[#3457D5]/40 text-[#3457D5] hover:bg-[#EEF1FE] disabled:opacity-50">
                   Sync to {targetValue} target
                 </button>
@@ -541,21 +544,21 @@ export default function ClientSettings() {
               <div className="grid grid-cols-3 gap-4 mb-3">
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#1C9A6C] uppercase">Short (≤{form.short_call_max}s)</label>
-                  <input type="number" disabled={settingsLoading}
+                  <input type="number"
                     className="rounded-xl border border-[#1C9A6C]/30 bg-white px-3 py-2 text-sm"
                     value={form.short_call_count}
                     onChange={(e) => setForm((p) => ({ ...p, short_call_count: Number(e.target.value) || 0 }))} />
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#C9862B] uppercase">Medium ({form.short_call_max}-{form.medium_call_max}s)</label>
-                  <input type="number" disabled={settingsLoading}
+                  <input type="number"
                     className="rounded-xl border border-[#C9862B]/30 bg-white px-3 py-2 text-sm"
                     value={form.medium_call_count}
                     onChange={(e) => setForm((p) => ({ ...p, medium_call_count: Number(e.target.value) || 0 }))} />
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#3457D5] uppercase">Long (&gt;{form.medium_call_max}s)</label>
-                  <input type="number" disabled={settingsLoading}
+                  <input type="number"
                     className="rounded-xl border border-[#3457D5]/30 bg-white px-3 py-2 text-sm"
                     value={form.long_call_count}
                     onChange={(e) => setForm((p) => ({ ...p, long_call_count: Number(e.target.value) || 0 }))} />
@@ -574,14 +577,14 @@ export default function ClientSettings() {
               <div className="grid grid-cols-2 gap-4 mt-4">
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Short Max (sec)</label>
-                  <input type="number" disabled={settingsLoading}
+                  <input type="number"
                     className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
                     value={form.short_call_max}
                     onChange={(e) => setForm((p) => ({ ...p, short_call_max: Number(e.target.value) || 120 }))} />
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Medium Max (sec)</label>
-                  <input type="number" disabled={settingsLoading}
+                  <input type="number"
                     className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
                     value={form.medium_call_max}
                     onChange={(e) => setForm((p) => ({ ...p, medium_call_max: Number(e.target.value) || 600 }))} />
@@ -652,21 +655,21 @@ export default function ClientSettings() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Client MRR</label>
-                  <input type="number" disabled={settingsLoading}
+                  <input type="number"
                     className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
                     value={form.client_mrr}
                     onChange={(e) => setForm((p) => ({ ...p, client_mrr: Number(e.target.value) || 0 }))} />
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Call Volume</label>
-                  <input type="number" disabled={settingsLoading}
+                  <input type="number"
                     className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
                     value={form.client_call_volume}
                     onChange={(e) => setForm((p) => ({ ...p, client_call_volume: Number(e.target.value) || 0 }))} />
                 </div>
                 <div className="flex flex-col gap-1 md:col-span-2">
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Campaign Filter</label>
-                  <input disabled={settingsLoading}
+                  <input
                     className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
                     value={toCsv(form.campaign_filter)}
                     placeholder="Campaign-A, Campaign-B, Campaign-C"
@@ -697,7 +700,7 @@ export default function ClientSettings() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] font-semibold text-[#1C9A6C] uppercase">Interested categories (comma separated)</label>
-                    <input disabled={settingsLoading}
+                    <input
                       className="rounded-xl border border-[#1C9A6C]/30 bg-white px-3 py-2 text-sm"
                       value={toCsv(form.sales_interested_values)}
                       onChange={(e) => setForm((p) => ({ ...p, sales_interested_values: toList(e.target.value) }))}
@@ -705,7 +708,7 @@ export default function ClientSettings() {
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] font-semibold text-[#D14343] uppercase">Not-interested categories (comma separated)</label>
-                    <input disabled={settingsLoading}
+                    <input
                       className="rounded-xl border border-[#D14343]/30 bg-white px-3 py-2 text-sm"
                       value={toCsv(form.sales_not_interested_values)}
                       onChange={(e) => setForm((p) => ({ ...p, sales_not_interested_values: toList(e.target.value) }))}
@@ -713,14 +716,14 @@ export default function ClientSettings() {
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] font-semibold text-[#1C9A6C] uppercase">Audits for interested calls</label>
-                    <input type="number" min="0" disabled={settingsLoading}
+                    <input type="number" min="0"
                       className="rounded-xl border border-[#1C9A6C]/30 bg-white px-3 py-2 text-sm"
                       value={form.sales_interested_audit_count}
                       onChange={(e) => setForm((p) => ({ ...p, sales_interested_audit_count: Number(e.target.value) || 0 }))} />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] font-semibold text-[#D14343] uppercase">Audits for not-interested calls</label>
-                    <input type="number" min="0" disabled={settingsLoading}
+                    <input type="number" min="0"
                       className="rounded-xl border border-[#D14343]/30 bg-white px-3 py-2 text-sm"
                       value={form.sales_not_interested_audit_count}
                       onChange={(e) => setForm((p) => ({ ...p, sales_not_interested_audit_count: Number(e.target.value) || 0 }))} />

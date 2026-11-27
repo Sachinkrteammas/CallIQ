@@ -144,45 +144,56 @@ def _build_agent_details(client: Client, db2: Optional[Session], db3: Optional[S
 
     all_users: Set[str] = set()
 
+    # Secondary DBs are optional. A server that cannot reach them must still
+    # return the saved settings so the form does not stay stuck/fail to load.
     if db3 is not None:
-        filters = ingroups if ingroups else campaigns
-        for f in filters:
-            rows = db3.execute(
-                text("SELECT user FROM vicidial_users WHERE closer_campaigns LIKE :val"),
-                {"val": f"%{f}%"},
-            ).mappings().all()
-            for r in rows:
-                if r["user"]:
-                    all_users.add(r["user"].strip())
+        try:
+            filters = ingroups if ingroups else campaigns
+            for f in filters:
+                rows = db3.execute(
+                    text("SELECT user FROM vicidial_users WHERE closer_campaigns LIKE :val"),
+                    {"val": f"%{f}%"},
+                ).mappings().all()
+                for r in rows:
+                    if r["user"]:
+                        all_users.add(r["user"].strip())
+        except Exception as exc:
+            print(f"[client-settings] DB3 agent lookup failed: {exc}")
 
     agents_list: List[dict] = []
-    if db2 is None or SessionLocal3 is None:
+    if db2 is None:
         return agents_list
 
     if not ingroups and db3 is not None:
-        vicidial_rows = db3.execute(
-            text("SELECT user FROM vicidial_users WHERE user_group = 'Dialdesk'")
-        ).mappings().all()
-        dialdesk_users = [r["user"].strip() for r in vicidial_rows if r["user"]]
-        usernames = dialdesk_users
+        try:
+            vicidial_rows = db3.execute(
+                text("SELECT user FROM vicidial_users WHERE user_group = 'Dialdesk'")
+            ).mappings().all()
+            usernames = [r["user"].strip() for r in vicidial_rows if r["user"]]
+        except Exception as exc:
+            print(f"[client-settings] DB3 dialdesk lookup failed: {exc}")
+            usernames = list(all_users)
     else:
         usernames = list(all_users)
 
     if usernames:
-        placeholders = ",".join([f":u{i}" for i in range(len(usernames))])
-        rows = db2.execute(
-            text(f"""
-                SELECT username, displayname
-                FROM agent_master
-                WHERE username IN ({placeholders})
-                  AND status = 'A'
-            """),
-            {f"u{i}": user for i, user in enumerate(usernames)},
-        ).mappings().all()
-        agents_list = [
-            {"username": r["username"], "displayname": r["displayname"]}
-            for r in rows
-        ]
+        try:
+            placeholders = ",".join([f":u{i}" for i in range(len(usernames))])
+            rows = db2.execute(
+                text(f"""
+                    SELECT username, displayname
+                    FROM agent_master
+                    WHERE username IN ({placeholders})
+                      AND status = 'A'
+                """),
+                {f"u{i}": user for i, user in enumerate(usernames)},
+            ).mappings().all()
+            agents_list = [
+                {"username": r["username"], "displayname": r["displayname"]}
+                for r in rows
+            ]
+        except Exception as exc:
+            print(f"[client-settings] DB2 agent lookup failed: {exc}")
 
     return agents_list
 
