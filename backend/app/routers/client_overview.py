@@ -9,6 +9,7 @@ from typing import Optional
 from ..database import get_db
 from ..services.recording_url import normalize_recording_url
 from ..services.audit_params import aggregate_parameters, extract_sections, coerce_json
+from ..services.audit_diagnostics import audit_diagnostics, call_status, has_audit_data
 from ..services.cdr_service import known_queue_keys, list_cdr_sources, queue_key
 from .auth import get_current_user
 from fastapi import BackgroundTasks
@@ -1213,7 +1214,8 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
 
     sql = text(f"""
         SELECT {', '.join(fields)},
-               ca.total_score, ca.percentage, ca.ranking, ca.fatal_flag, ca.audit_json
+               ca.total_score, ca.percentage, ca.ranking, ca.fatal_flag, ca.audit_json,
+               ca.sale_category, ca.invalid_reason
         FROM call_logs cl
         LEFT JOIN call_audits ca ON ca.call_id = cl.call_id
         WHERE cl.call_id = :call_id
@@ -1240,7 +1242,9 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
 
     percentage = data.get("percentage")
     raw_audit = data.get("audit_json")
-    has_audit = any(data.get(k) is not None for k in ("total_score", "percentage", "ranking")) or bool(raw_audit)
+    has_audit = has_audit_data(data)
+    status, processing_error = call_status(has_audit, data.get("transcript"))
+    fatal_errors, critical_failures = audit_diagnostics(audit)
 
     if percentage is not None:
         overall = round(float(percentage), 1)
@@ -1273,6 +1277,18 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
         ).scalar()
         client_name = cname
 
+    agent_stats = {}
+    if data.get("agent_id"):
+        agent_stats = db.execute(
+            text("""
+                SELECT COUNT(*) AS total_audits,
+                       COALESCE(AVG(percentage), 0) AS avg_score,
+                       SUM(CASE WHEN fatal_flag = 1 THEN 1 ELSE 0 END) AS fatal_count
+                FROM call_audits WHERE agent_id = :agent_id
+            """),
+            {"agent_id": data["agent_id"]},
+        ).mappings().one_or_none() or {}
+
     return {
         "id": call_id,
         "call_id": call_id,
@@ -1296,9 +1312,22 @@ def call_detail(call_id: str, db: Session = Depends(get_db)):
         "voice_mail": bool(data.get("voice_mail")),
         "has_audit": has_audit,
         "audit_pending": not has_audit,
+        "status": status,
+        "processing_error": processing_error,
+        "total_score": data.get("total_score") if has_audit else None,
+        "percentage": percentage if has_audit else None,
+        "fatal_flag": bool(data.get("fatal_flag")) if has_audit else False,
+        "fatal_errors": fatal_errors,
+        "critical_failures": critical_failures,
+        "audit_json": audit,
+        "evaluation": audit,
+        "sale_category": data.get("sale_category") if has_audit else "Pending",
         "ranking": ranking,
         "risk": risk,
         "scores": scores,
+        "agent_total_audits": int(agent_stats.get("total_audits") or 0),
+        "agent_avg_score": round(float(agent_stats.get("avg_score") or 0), 1),
+        "agent_fatal_count": int(agent_stats.get("fatal_count") or 0),
         "parameters": aggregate_parameters([audit]) if (audit and has_audit) else [],
         "timeline": timeline,
         "transcript": lines,

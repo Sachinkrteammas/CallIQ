@@ -6,28 +6,37 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal2
+from app.services.audit_diagnostics import (
+    audit_diagnostics, call_status, coerce_audit_json, has_audit_data,
+)
 from app.services.recording_url import normalize_recording_url
 from .. import data
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
 
+# Behaviour drill-down from the Conversation Intelligence heatmap.
+_BEHAVIOUR_FILTERS = {
+    "Dead Air": "dead_air_pct > 10",
+    "Long Hold": "long_hold_sec > 30",
+    "Interruptions": "interruptions > 2",
+    "Talk Ratio": "talk_ratio_pct < 35",
+    "Silence": "silence_pct > 10",
+    "Cross Talk": "cross_talk_pct > 5",
+    "Escalation": "escalation_pct > 5",
+    "Script Dev": "script_deviation_pct > 15",
+}
+
 
 def _db_row_to_call(row, agent_info=None) -> dict:
-    raw_audit_json = row.get("audit_json")
-    audit_json = raw_audit_json or {}
-    if isinstance(audit_json, str):
-        try:
-            audit_json = json.loads(audit_json)
-        except Exception:
-            audit_json = {}
+    audit_json = coerce_audit_json(row.get("audit_json"))
 
     recording = normalize_recording_url(row.get("recording_path") or "")
     if recording and not recording.startswith("http"):
         recording = f"http://{recording}"
 
-    has_audit = any(
-        row.get(k) is not None for k in ("total_score", "percentage", "ranking")
-    ) or (raw_audit_json not in (None, "", {}, "{}", "null")) or bool(audit_json)
+    has_audit = has_audit_data(dict(row))
+    status, processing_error = call_status(has_audit, row.get("transcript"))
+    fatal_errors, critical_failures = audit_diagnostics(audit_json)
 
     return {
         "_call_id": row.get("call_id"),
@@ -38,12 +47,18 @@ def _db_row_to_call(row, agent_info=None) -> dict:
         "_created_at": str(row.get("start_time") or row.get("created_at") or ""),
         "_recording_path": recording,
         "has_audit": has_audit,
+        "status": status,
+        "processing_error": processing_error,
         "total_score": row.get("total_score") if has_audit else None,
         "percentage": row.get("percentage") if has_audit else None,
         "ranking": row.get("ranking") if has_audit else "Pending",
         "fatal_flag": bool(row.get("fatal_flag")) if has_audit else False,
+        "fatal_errors": fatal_errors,
+        "critical_failures": critical_failures,
         "call_category": audit_json.get("call_category") or "—",
         "sections": audit_json.get("sections") or {},
+        "audit_json": audit_json,
+        "evaluation": audit_json,
         "sale_category": row.get("sale_category") if has_audit else "Pending",
         "invalid_reason": row.get("invalid_reason") if has_audit else None,
         "crm_sale_done": bool(row.get("crm_sale_done")) if has_audit and row.get("crm_sale_done") is not None else False,
@@ -105,9 +120,12 @@ def list_calls(
     crm_sale_done: Optional[bool] = None,
     customer_confirmation: Optional[str] = None,
     order_information: Optional[str] = None,
+    process: Optional[str] = None,              # configured process / campaign / ingroup
+    behaviour: Optional[str] = None,            # heatmap behaviour drill-down
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     band: Optional[str] = None,            # BQ / MQ / TQ
+    status: Optional[str] = None,          # Completed / Awaiting Audit / Pending / failed transcript
     page: int = 1,
     page_size: int = 15,
     db: Session = Depends(get_db),
@@ -124,6 +142,23 @@ def list_calls(
     elif client_type and client_type.lower() in ("sales", "service"):
         op = "=" if client_type.lower() == "sales" else "!="
         where.append(f"cl.client_id IN (SELECT id FROM clients WHERE COALESCE(ingroups, '') {op} '' COLLATE utf8mb4_general_ci)")
+    if process:
+        # Exact token match against the configured process names of a client.
+        where.append(
+            "cl.client_id IN ("
+            "SELECT id FROM clients WHERE CONCAT(',', COALESCE(name, ''), ',', "
+            "COALESCE(campaigns, ''), ',', COALESCE(ingroups, ''), ',') "
+            "LIKE :process_pattern)"
+        )
+        params["process_pattern"] = f"%,{process},%"
+    if behaviour:
+        vad_condition = _BEHAVIOUR_FILTERS.get(behaviour)
+        if vad_condition:
+            where.append(
+                f"cl.call_id IN (SELECT call_id FROM call_vad_metrics WHERE {vad_condition})"
+            )
+        elif behaviour == "Sentiment":
+            where.append("ca.percentage < 80")
     if agent_id:
         where.append("cl.agent_id = :agent_id")
         params["agent_id"] = agent_id
@@ -158,6 +193,20 @@ def list_calls(
         elif band == "TQ":
             where.append("ca.percentage >= 94")
 
+    # ═══ AUDIT STATUS FILTER ═══
+    if status:
+        wanted = status.strip()
+        if wanted.lower() == "completed":
+            where.append("ca.id IS NOT NULL")
+        elif wanted.lower() in ("pending", "awaiting audit"):
+            where.append("ca.id IS NULL")
+        elif wanted == "Recording Missing":
+            where.append("cl.transcript = '[RECORDING_MISSING]' AND ca.id IS NULL")
+        elif wanted == "No Speech":
+            where.append("cl.transcript = '[NO_SPEECH]' AND ca.id IS NULL")
+        elif wanted == "Transcript Failed":
+            where.append("cl.transcript = '[TRANSCRIPT_FAILED]' AND ca.id IS NULL")
+
     wc = " AND ".join(where)
 
     count_sql = text(f"""
@@ -173,7 +222,7 @@ def list_calls(
 
     data_sql = text(f"""
         SELECT cl.call_id, cl.agent_id, cl.duration, cl.start_time,
-               cl.recording_path, cl.created_at,
+               cl.recording_path, cl.created_at, cl.transcript,
                ca.total_score, ca.percentage, ca.ranking, ca.fatal_flag, ca.audit_json,
                ca.sale_category, ca.invalid_reason, ca.crm_sale_done,
                ca.customer_confirmation, ca.order_information

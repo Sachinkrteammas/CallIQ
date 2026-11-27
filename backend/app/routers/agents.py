@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.services.audit_params import aggregate_parameters
 from .. import data
+from .auth import get_current_user
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -34,6 +35,13 @@ def _rag(pct):
 # ═══════════════════════════════════════════════════════════
 # Pydantic models for coaching CRUD
 # ═══════════════════════════════════════════════════════════
+COACHING_TYPES = [
+    "Assigned Training",
+    "Refresher Training",
+    "Feedback Sessions",
+]
+
+
 class CoachingUpdate(BaseModel):
     status: Optional[str] = None
     recommendation: Optional[str] = None
@@ -45,6 +53,8 @@ class CoachingUpdate(BaseModel):
     coaching_type: Optional[str] = None
     resolution_remarks: Optional[str] = None
     resolved_by: Optional[str] = None
+    completed_by: Optional[str] = None
+    completed_by_id: Optional[str] = None
 
 
 class CoachingCreate(BaseModel):
@@ -238,6 +248,29 @@ def _build_coaching_queue(client_id: Optional[int] = None, db: Session = None):
     return result
 
 
+def _current_user_identity(db: Session, user: dict):
+    """Resolve the authenticated user for completion traceability."""
+    uid = user.get("sub") or user.get("id")
+    fallback = (
+        user.get("full_name")
+        or user.get("name")
+        or user.get("username")
+        or user.get("email")
+        or "Admin"
+    )
+    if uid:
+        try:
+            row = db.execute(
+                text("SELECT full_name, email FROM users WHERE id = :id"),
+                {"id": uid},
+            ).mappings().one_or_none()
+            if row:
+                fallback = row.get("full_name") or row.get("email") or fallback
+        except Exception:
+            pass
+    return fallback, str(uid) if uid else ""
+
+
 def _ensure_coaching_table(db: Session = None):
     if db is None:
         return
@@ -259,6 +292,8 @@ def _ensure_coaching_table(db: Session = None):
                 coaching_type VARCHAR(50) NULL,
                 resolution_remarks TEXT NULL,
                 resolved_by VARCHAR(255) NULL,
+                completed_by VARCHAR(255) NULL,
+                completed_by_id VARCHAR(64) NULL,
                 resolved_at TIMESTAMP NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -271,6 +306,8 @@ def _ensure_coaching_table(db: Session = None):
             ("coaching_type", "ALTER TABLE coaching_queue ADD COLUMN coaching_type VARCHAR(50) NULL"),
             ("resolution_remarks", "ALTER TABLE coaching_queue ADD COLUMN resolution_remarks TEXT NULL"),
             ("resolved_by", "ALTER TABLE coaching_queue ADD COLUMN resolved_by VARCHAR(255) NULL"),
+            ("completed_by", "ALTER TABLE coaching_queue ADD COLUMN completed_by VARCHAR(255) NULL"),
+            ("completed_by_id", "ALTER TABLE coaching_queue ADD COLUMN completed_by_id VARCHAR(64) NULL"),
             ("resolved_at", "ALTER TABLE coaching_queue ADD COLUMN resolved_at TIMESTAMP NULL"),
         ]:
             try:
@@ -302,6 +339,8 @@ def _coaching_row_to_item(row) -> dict:
         "coaching_type": m.get("coaching_type") or "",
         "resolution_remarks": m.get("resolution_remarks") or "",
         "resolved_by": m.get("resolved_by") or "",
+        "completed_by": m.get("completed_by") or m.get("resolved_by") or "",
+        "completed_by_id": m.get("completed_by_id") or "",
         "resolved_at": str(resolved_at) if resolved_at else None,
     }
 
@@ -312,7 +351,7 @@ def _coaching_items_from_db(db: Session, client_id: Optional[int] = None) -> lis
         SELECT id, agent_id, agent_name, team, status, recommendation,
                estimated_improvement, evidence, score_at_flag, reason,
                trainer_name, trainer_id, coaching_type,
-               resolution_remarks, resolved_by, resolved_at
+               resolution_remarks, resolved_by, completed_by, completed_by_id, resolved_at
         FROM coaching_queue
         ORDER BY updated_at DESC, id DESC
     """)).mappings().all()
@@ -357,10 +396,12 @@ def create_coaching_item(payload: CoachingCreate, db: Session = Depends(get_db))
     result = db.execute(text("""
         INSERT INTO coaching_queue
             (agent_id, agent_name, team, status, recommendation,
-             estimated_improvement, reason, created_at, updated_at)
+             estimated_improvement, reason, trainer_name, trainer_id,
+             coaching_type, created_at, updated_at)
         VALUES
             (:agent_id, :agent_name, :team, :status, :recommendation,
-             :estimated_improvement, :reason, NOW(), NOW())
+             :estimated_improvement, :reason, :trainer_name, :trainer_id,
+             :coaching_type, NOW(), NOW())
     """), {
         "agent_id": payload.agent_id,
         "agent_name": payload.agent_name,
@@ -369,6 +410,9 @@ def create_coaching_item(payload: CoachingCreate, db: Session = Depends(get_db))
         "recommendation": payload.recommendation or "",
         "estimated_improvement": payload.estimated_improvement or "",
         "reason": payload.reason or "",
+        "trainer_name": payload.trainer_name or None,
+        "trainer_id": payload.trainer_id or None,
+        "coaching_type": payload.coaching_type or None,
     })
     db.commit()
 
@@ -377,7 +421,7 @@ def create_coaching_item(payload: CoachingCreate, db: Session = Depends(get_db))
         SELECT id, agent_id, agent_name, team, status, recommendation,
                estimated_improvement, evidence, score_at_flag, reason,
                trainer_name, trainer_id, coaching_type,
-               resolution_remarks, resolved_by, resolved_at
+               resolution_remarks, resolved_by, completed_by, completed_by_id, resolved_at
         FROM coaching_queue WHERE id = :id
     """), {"id": item_id}).mappings().one()
     return _coaching_row_to_item(row)
@@ -432,12 +476,35 @@ def auto_flag_coaching(
 
 
 @router.put("/coaching/{item_id}")
-def update_coaching_item(item_id: str, payload: CoachingUpdate, db: Session = Depends(get_db)):
+def update_coaching_item(
+    item_id: str,
+    payload: CoachingUpdate,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     _ensure_coaching_table(db)
+    existing = db.execute(
+        text("SELECT trainer_name, resolution_remarks FROM coaching_queue WHERE id = :id"),
+        {"id": item_id},
+    ).mappings().one_or_none()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Coaching item not found")
+
     updates = {k: v for k, v in payload.dict(exclude_unset=True).items() if v is not None}
     if updates.get("status") == "Completed":
-        # Auto-stamp resolution time if not already set
-        updates.setdefault("resolved_at", None)
+        # Completion is always attributed to the authenticated user, not to
+        # free text supplied by the browser.
+        completed_by, completed_by_id = _current_user_identity(db, user)
+        updates["completed_by"] = completed_by
+        updates["completed_by_id"] = completed_by_id
+        updates["resolved_by"] = updates.get("resolved_by") or completed_by
+        updates.pop("resolved_at", None)
+
+        if not (updates.get("trainer_name") or existing.get("trainer_name")):
+            raise HTTPException(status_code=400, detail="Trainer name is required to complete coaching.")
+        if not (updates.get("resolution_remarks") or existing.get("resolution_remarks")):
+            raise HTTPException(status_code=400, detail="Resolution remarks are required to complete coaching.")
+
     if updates:
         set_parts = [f"{k} = :{k}" for k in updates]
         if updates.get("status") == "Completed":
@@ -454,7 +521,7 @@ def update_coaching_item(item_id: str, payload: CoachingUpdate, db: Session = De
         SELECT id, agent_id, agent_name, team, status, recommendation,
                estimated_improvement, evidence, score_at_flag, reason,
                trainer_name, trainer_id, coaching_type,
-               resolution_remarks, resolved_by, resolved_at
+               resolution_remarks, resolved_by, completed_by, completed_by_id, resolved_at
         FROM coaching_queue WHERE id = :id
     """), {"id": item_id}).mappings().one_or_none()
     if not row:

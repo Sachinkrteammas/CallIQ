@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.services.client_scope import scope_where
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -63,11 +64,13 @@ def _extract_sale_fields(audit_json, sale_category, invalid_reason):
 def export_client_wise(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_id: Optional[int] = None,
     client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    where = ["1=1"]
-    params = {}
+    scope, params, effective_type = scope_where(db, client_id, client_type)
+    include_sales = effective_type != "service"
+    where = ["1=1"] + scope
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
@@ -125,12 +128,13 @@ def export_client_wise(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "Client ID", "Client Name", "Total Audits", "Avg Score", "Fatal",
-        "Genuine Sales", "Invalid Sales", "Forcefully Placed",
-        "Not Confirmed", "Without Information",
-        "Genuine %", "Invalid %",
-    ])
+    header = ["Client ID", "Client Name", "Total Audits", "Avg Score", "Fatal"]
+    if include_sales:
+        header += [
+            "Genuine Sales", "Invalid Sales", "Forcefully Placed",
+            "Not Confirmed", "Without Information", "Genuine %", "Invalid %",
+        ]
+    writer.writerow(header)
 
     for cm in sorted(client_map.values(), key=lambda x: -x["total"]):
         total = cm["total"]
@@ -140,11 +144,13 @@ def export_client_wise(
         gen_pct = round((genuine / total) * 100, 2) if total else 0
         inv_pct = round((invalid / total) * 100, 2) if total else 0
 
-        writer.writerow([
-            cm["client_id"], cm["client_name"], total, avg, cm["fatal"],
-            genuine, invalid, cm["forcefully"], cm["not_confirmed"], cm["without_info"],
-            f"{gen_pct}%", f"{inv_pct}%",
-        ])
+        row = [cm["client_id"], cm["client_name"], total, avg, cm["fatal"]]
+        if include_sales:
+            row += [
+                genuine, invalid, cm["forcefully"], cm["not_confirmed"],
+                cm["without_info"], f"{gen_pct}%", f"{inv_pct}%",
+            ]
+        writer.writerow(row)
 
     output.seek(0)
     filename = f"client_wise_{datetime.now().strftime('%Y%m%d')}.csv"
@@ -163,13 +169,12 @@ def export_agent_wise(
     client_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    where = ["ca.agent_id IS NOT NULL"]
-    params = {}
-    if client_id:
-        where.append("ca.client_id = :client_id")
-        params["client_id"] = client_id
+    scope, params, effective_type = scope_where(db, client_id, client_type)
+    include_sales = effective_type != "service"
+    where = ["ca.agent_id IS NOT NULL"] + scope
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
@@ -224,12 +229,13 @@ def export_agent_wise(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "Agent ID", "Total Audits", "Avg Score", "Fatal",
-        "Genuine Sales", "Invalid Sales", "Forcefully Placed",
-        "Not Confirmed", "Without Information",
-        "Genuine %", "Invalid %",
-    ])
+    header = ["Agent ID", "Total Audits", "Avg Score", "Fatal"]
+    if include_sales:
+        header += [
+            "Genuine Sales", "Invalid Sales", "Forcefully Placed",
+            "Not Confirmed", "Without Information", "Genuine %", "Invalid %",
+        ]
+    writer.writerow(header)
 
     for am in sorted(agent_map.values(), key=lambda x: -x["total"]):
         total = am["total"]
@@ -239,11 +245,13 @@ def export_agent_wise(
         gen_pct = round((genuine / total) * 100, 2) if total else 0
         inv_pct = round((invalid / total) * 100, 2) if total else 0
 
-        writer.writerow([
-            am["agent_id"], total, avg, am["fatal"],
-            genuine, invalid, am["forcefully"], am["not_confirmed"], am["without_info"],
-            f"{gen_pct}%", f"{inv_pct}%",
-        ])
+        row = [am["agent_id"], total, avg, am["fatal"]]
+        if include_sales:
+            row += [
+                genuine, invalid, am["forcefully"], am["not_confirmed"],
+                am["without_info"], f"{gen_pct}%", f"{inv_pct}%",
+            ]
+        writer.writerow(row)
 
     output.seek(0)
     filename = f"agent_wise_{datetime.now().strftime('%Y%m%d')}"
@@ -267,20 +275,19 @@ def export_audits(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     sale_category: Optional[str] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    where = ["1=1"]
-    params = {}
-    if client_id:
-        where.append("ca.client_id = :client_id")
-        params["client_id"] = client_id
+    scope, params, effective_type = scope_where(db, client_id, client_type)
+    include_sales = effective_type != "service"
+    where = ["1=1"] + scope
     if from_date:
         where.append("ca.created_at >= :from_date")
         params["from_date"] = from_date
     if to_date:
         where.append("ca.created_at <= :to_date")
         params["to_date"] = to_date + " 23:59:59"
-    if sale_category:
+    if sale_category and include_sales:
         where.append("ca.sale_category = :sale_category")
         params["sale_category"] = sale_category
     wc = " AND ".join(where)
@@ -297,23 +304,32 @@ def export_audits(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
+    header = [
         "Call ID", "Client ID", "Agent ID", "Score", "Percentage",
-        "Ranking", "Fatal", "Sale Category", "Invalid Reason",
-        "CRM Sale Done", "Customer Confirmation", "Order Information",
-        "Audit Date"
-    ])
+        "Ranking", "Fatal",
+    ]
+    if include_sales:
+        header += [
+            "Sale Category", "Invalid Reason", "CRM Sale Done",
+            "Customer Confirmation", "Order Information",
+        ]
+    header.append("Audit Date")
+    writer.writerow(header)
+
     for r in rows:
-        sc, ir = _extract_sale_fields(r["audit_json"], r["sale_category"], r["invalid_reason"])
-        writer.writerow([
+        row = [
             r["call_id"], r["client_id"], r["agent_id"],
             r["total_score"], r["percentage"], r["ranking"],
             "Yes" if r["fatal_flag"] else "No",
-            sc, ir or "",
-            "Yes" if r["crm_sale_done"] else "No",
-            r["customer_confirmation"], r["order_information"],
-            str(r["created_at"] or ""),
-        ])
+        ]
+        if include_sales:
+            sc, ir = _extract_sale_fields(r["audit_json"], r["sale_category"], r["invalid_reason"])
+            row += [
+                sc, ir or "", "Yes" if r["crm_sale_done"] else "No",
+                r["customer_confirmation"], r["order_information"],
+            ]
+        row.append(str(r["created_at"] or ""))
+        writer.writerow(row)
 
     output.seek(0)
     filename = f"audits_export_{datetime.now().strftime('%Y%m%d')}.csv"
@@ -332,16 +348,16 @@ def export_audits(
 def export_monthly_audit(
     client_id: Optional[int] = None,
     year: Optional[int] = None,
+    client_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     if year is None:
         year = datetime.now().year
 
-    where = ["YEAR(ca.created_at) = :year"]
-    params = {"year": year}
-    if client_id:
-        where.append("ca.client_id = :client_id")
-        params["client_id"] = client_id
+    scope, scope_params, effective_type = scope_where(db, client_id, client_type)
+    include_sales = effective_type != "service"
+    where = ["YEAR(ca.created_at) = :year"] + scope
+    params = {"year": year, **scope_params}
     wc = " AND ".join(where)
 
     rows = db.execute(text(f"""
@@ -358,21 +374,26 @@ def export_monthly_audit(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Month", "Audits", "Avg Score", "Genuine", "Invalid"])
+    header = ["Month", "Audits", "Avg Score"]
+    if include_sales:
+        header += ["Genuine", "Invalid"]
+    writer.writerow(header)
 
     month_map = {r["m"]: r for r in rows}
     total = 0
+    empty_row = [0, 0] + ([0, 0] if include_sales else [])
     for m in range(1, 13):
         r = month_map.get(m)
         if r:
-            writer.writerow([month_names[m - 1], r["cnt"],
-                             round(float(r["avg_score"] or 0), 1),
-                             r["genuine_count"], r["invalid_count"]])
+            row = [month_names[m - 1], r["cnt"], round(float(r["avg_score"] or 0), 1)]
+            if include_sales:
+                row += [r["genuine_count"], r["invalid_count"]]
+            writer.writerow(row)
             total += r["cnt"]
         else:
-            writer.writerow([month_names[m - 1], 0, 0, 0, 0])
+            writer.writerow([month_names[m - 1]] + empty_row)
     writer.writerow([])
-    writer.writerow(["TOTAL", total, "", "", ""])
+    writer.writerow(["TOTAL", total] + (["", ""] if include_sales else []))
 
     output.seek(0)
     filename = f"monthly_audit_{year}"

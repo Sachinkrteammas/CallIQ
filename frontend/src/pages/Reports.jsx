@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Card, SectionTitle } from '../components/shared.jsx'
 import { FileText, Download, Loader2, Clock, CheckCircle, Mail, Calendar, Filter, AlertTriangle } from 'lucide-react'
 import { useClientFilter } from '../components/ClientContext.jsx'
@@ -9,14 +9,14 @@ const TYPES = [
   { name: 'Detailed Audit Records', icon: FileText, desc: 'Call-level audit export with scores, sale status and reasons', export: 'audits' },
   { name: 'Agent Performance', icon: FileText, desc: 'Agent-wise audits, scores and sale outcomes', export: 'agent' },
   { name: 'Client Scorecard', icon: FileText, desc: 'Client-wise summary of audits and sales quality', export: 'client' },
-  { name: 'Sales Categorization', icon: FileText, desc: 'Genuine vs Invalid sales with reasons (included in audit export)', export: 'audits' },
+  { name: 'Sales Categorization', icon: FileText, desc: 'Genuine vs Invalid sales with reasons (included in audit export)', export: 'sales' },
   { name: 'Executive Summary', icon: FileText, desc: 'Use Client Scorecard export for a client-level summary', export: 'client' },
   { name: 'Compliance Audit', icon: FileText, desc: 'Use Detailed Audit Records export and filter by fatal/score in sheet', export: 'audits' },
 ]
 const FORMATS = ['CSV']
 
 export default function Reports() {
-  const { clients, clientId, setClientId, fromDate, toDate, setFromDate, setToDate } = useClientFilter()
+  const { clients, clientId, setClientId, clientType, fromDate, toDate, setFromDate, setToDate } = useClientFilter()
   const [type, setType] = useState(TYPES[0].name)
   const [format, setFormat] = useState('CSV')
   const [loading, setLoading] = useState(false)
@@ -29,6 +29,18 @@ export default function Reports() {
   const [invalidReason, setInvalidReason] = useState('')
 
   const [error, setError] = useState(null)
+
+  // Service views must never offer or export sales-only reports.
+  const availableTypes = useMemo(
+    () => clientType === 'Service'
+      ? TYPES.filter((t) => t.export !== 'sales' && !t.name.includes('Sales') && t.name !== 'Executive Summary')
+      : TYPES,
+    [clientType],
+  )
+
+  useEffect(() => {
+    if (!availableTypes.some((t) => t.name === type)) setType(availableTypes[0].name)
+  }, [availableTypes, type])
 
   // Issue 6: live data — trigger the fetch/STT/audit pipeline on demand
   const [pipelineRunning, setPipelineRunning] = useState(false)
@@ -67,7 +79,7 @@ export default function Reports() {
       if (clientId && clientId !== 'all') params.client_id = clientId
       if (saleCategory) params.sale_category = saleCategory
 
-      const selected = TYPES.find(t => t.name === type) || TYPES[0]
+      const selected = availableTypes.find(t => t.name === type) || availableTypes[0]
       if (selected.export === 'client') {
         await exportClientWiseReport(params)
       } else if (selected.export === 'agent') {
@@ -222,7 +234,7 @@ export default function Reports() {
           <div className="mb-4">
             <div className="text-xs font-semibold text-[#6B7385] mb-2 uppercase">Report Type</div>
             <div className="grid grid-cols-2 gap-2">
-              {TYPES.map((t) => (
+              {availableTypes.map((t) => (
                 <button key={t.name} onClick={() => setType(t.name)} className={`text-left text-sm px-4 py-3 rounded-xl border transition-all ${type === t.name ? 'border-[#3457D5] bg-[#EEF1FE] text-[#3457D5] font-semibold shadow-sm' : 'border-[#E7E2D8] text-[#1D2433] hover:border-[#3457D5]/30'}`}>
                   <div className="flex items-center gap-2">
                     <t.icon size={14} />
@@ -251,7 +263,7 @@ export default function Reports() {
             </div>
           )}
           <div className="mt-2 text-[10px] text-[#6B7385]">
-            Exports use real audited data and respect Client, Date range and Sale Status filters. PDF/Excel/Email scheduling is not configured in this build.
+            Exports use real audited data and respect the selected Client type (Sales/Service), Client, Date range and Sale Status filters. Service exports exclude sales-only columns.
           </div>
         </Card>
 

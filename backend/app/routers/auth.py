@@ -8,6 +8,7 @@ import jwt
 
 from ..database import get_db
 from ..core.config import get_settings
+from ..services.client_scope import normalize_client_type
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
@@ -60,8 +61,26 @@ def get_current_user(authorization: str = Header(default=None)):
     return decode_token(token)
 
 
-def _user_payload(m):
+def _user_payload(m, db=None):
+    """Resolve client type from the client's ingroups, not from user id alone."""
     raw_role = m.get("role") or ("admin" if m["is_superuser"] else "user")
+    if m["is_superuser"]:
+        client_type = "admin"
+    elif m["client_id"] and db is not None:
+        row = db.execute(
+            text("""
+                SELECT CASE WHEN COALESCE(ingroups, '') = '' COLLATE utf8mb4_general_ci
+                            THEN 'sales' ELSE 'service' END AS client_type
+                FROM clients WHERE id = :id
+            """),
+            {"id": m["client_id"]},
+        ).scalar()
+        client_type = normalize_client_type(row) or "sales"
+    elif m["client_id"]:
+        client_type = normalize_client_type(m.get("client_type")) or "sales"
+    else:
+        client_type = "sales"
+
     return {
         "id": m["id"],
         "email": m["email"],
@@ -69,9 +88,7 @@ def _user_payload(m):
         "role": raw_role,
         "is_admin": bool(m["is_superuser"]),
         "client_id": m["client_id"],
-        "client_type": m.get("client_type", "admin") if m.get("client_type") else (
-            "admin" if m["is_superuser"] else ("service" if m["client_id"] else "sales")
-        ),
+        "client_type": client_type,
     }
 
 
@@ -97,7 +114,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_token(m["id"], m["email"], bool(m["is_superuser"]), m["client_id"])
-    user = _user_payload(m)
+    user = _user_payload(m, db)
 
     return {"token": token, "user": user}
 
@@ -111,7 +128,7 @@ def get_me(user=Depends(get_current_user), db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
     m = row._mapping
-    payload = _user_payload(m)
+    payload = _user_payload(m, db)
     payload["created_at"] = str(m["created_at"])
     return payload
 

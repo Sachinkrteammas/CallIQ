@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -37,7 +38,18 @@ def _ensure_table(db: Session):
             medium_call_max INT DEFAULT 600,
             enable_sales_category_filter TINYINT(1) DEFAULT 0,
             sales_interested_values JSON,
-            sales_not_interested_values JSON
+            sales_not_interested_values JSON,
+            sales_interested_audit_count INT DEFAULT 0,
+            sales_not_interested_audit_count INT DEFAULT 0,
+            sales_prioritize_interested TINYINT(1) DEFAULT 1,
+            audit_mode VARCHAR(20) DEFAULT 'monthly',
+            monthly_target INT DEFAULT 30,
+            monthly_max INT DEFAULT 60,
+            daily_target INT DEFAULT 1,
+            daily_max INT DEFAULT 3,
+            short_call_count INT DEFAULT 5,
+            medium_call_count INT DEFAULT 15,
+            long_call_count INT DEFAULT 10
         )
     """))
     # Safe migrations
@@ -56,6 +68,9 @@ def _ensure_table(db: Session):
         ("enable_sales_category_filter", "TINYINT(1) DEFAULT 0"),
         ("sales_interested_values", "JSON"),
         ("sales_not_interested_values", "JSON"),
+        ("sales_interested_audit_count", "INT DEFAULT 0"),
+        ("sales_not_interested_audit_count", "INT DEFAULT 0"),
+        ("sales_prioritize_interested", "TINYINT(1) DEFAULT 1"),
         ("audit_mode", "VARCHAR(20) DEFAULT 'monthly'"),
         ("monthly_target", "INT DEFAULT 30"),
         ("monthly_max", "INT DEFAULT 60"),
@@ -96,6 +111,31 @@ def _db3_or_none():
 
 def _split_csv(raw: Optional[str]) -> List[str]:
     return [v.strip() for v in (raw or "").split(",") if v.strip()]
+
+
+def _int_or(raw, default: int) -> int:
+    """Preserve an explicit 0; only fall back when the value is missing/invalid."""
+    try:
+        return int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_list(raw) -> List[str]:
+    """Normalise JSON/CSV columns so the UI can always treat them as arrays."""
+    if isinstance(raw, list):
+        return [str(v).strip() for v in raw if str(v).strip()]
+    if isinstance(raw, str):
+        value = raw.strip()
+        if value.startswith("["):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return [str(v).strip() for v in parsed if str(v).strip()]
+            except (ValueError, TypeError):
+                pass
+        return _split_csv(value)
+    return []
 
 
 def _build_agent_details(client: Client, db2: Optional[Session], db3: Optional[Session]) -> List[dict]:
@@ -165,12 +205,26 @@ def _auto_criticality(settings: Setting) -> str:
 
 
 def _calculate_total(settings: Setting, selected_agents: List[str]) -> int:
-    """Total = agent_allocation * per_agent (priority), else selected_agents * per_agent."""
+    """Auto total always follows the configured MIN target (Monthly / Daily).
+
+    Duration counts are only used when no target is configured; the legacy
+    per-agent calculation is the final fallback.
+    """
+    mode = getattr(settings, "audit_mode", None) or "monthly"
+    target = _int_or(getattr(settings, "daily_target", None) if mode == "daily" else getattr(settings, "monthly_target", None), 0)
+    if target > 0:
+        return target
+
+    duration_total = sum(
+        _int_or(getattr(settings, key, None), 0)
+        for key in ("short_call_count", "medium_call_count", "long_call_count")
+    )
+    if duration_total > 0:
+        return duration_total
+
     per_agent = settings.audit_calls_per_agent or 0
     alloc = settings.agent_allocation or 0
-    if alloc > 0:
-        return alloc * per_agent
-    return len(selected_agents) * per_agent
+    return (alloc or len(selected_agents)) * per_agent
 
 
 def _settings_response(
@@ -181,24 +235,8 @@ def _settings_response(
     agents_list: List[dict],
 ) -> dict:
     if settings:
-        selected_agents = settings.agents or [a["username"] for a in agents_list]
+        selected_agents = _as_list(settings.agents) or [a["username"] for a in agents_list]
         total = _calculate_total(settings, selected_agents)
-        sales_interested = getattr(settings, "sales_interested_values", None) or []
-        sales_not_interested = getattr(settings, "sales_not_interested_values", None) or []
-        if isinstance(sales_interested, str):
-            try:
-                import json
-
-                sales_interested = json.loads(sales_interested)
-            except Exception:
-                sales_interested = []
-        if isinstance(sales_not_interested, str):
-            try:
-                import json
-
-                sales_not_interested = json.loads(sales_not_interested)
-            except Exception:
-                sales_not_interested = []
         return {
             "client_id": client_id,
             "total": total,
@@ -206,8 +244,8 @@ def _settings_response(
             "min_call_duration": settings.min_call_duration or 20,
             "max_call_duration": settings.max_call_duration or 3600,
             "agents": selected_agents,
-            "campaign_filter": settings.campaign_filter if settings.campaign_filter is not None else campaigns,
-            "ingroup_filter": settings.ingroup_filter if settings.ingroup_filter is not None else ingroups,
+            "campaign_filter": _as_list(settings.campaign_filter) if settings.campaign_filter is not None else campaigns,
+            "ingroup_filter": _as_list(settings.ingroup_filter) if settings.ingroup_filter is not None else ingroups,
             "agent_details": agents_list,
             "is_default": False,
             "client_mrr": settings.client_mrr or 0.0,
@@ -222,16 +260,24 @@ def _settings_response(
             "short_call_max": settings.short_call_max or 120,
             "medium_call_max": settings.medium_call_max or 600,
             "enable_sales_category_filter": int(getattr(settings, "enable_sales_category_filter", 0) or 0),
-            "sales_interested_values": sales_interested or [],
-            "sales_not_interested_values": sales_not_interested or [],
+            "sales_interested_values": _as_list(getattr(settings, "sales_interested_values", None)),
+            "sales_not_interested_values": _as_list(getattr(settings, "sales_not_interested_values", None)),
+            "sales_interested_audit_count": _int_or(getattr(settings, "sales_interested_audit_count", None), 0),
+            "sales_not_interested_audit_count": _int_or(getattr(settings, "sales_not_interested_audit_count", None), 0),
+            "sales_prioritize_interested": _int_or(getattr(settings, "sales_prioritize_interested", None), 1),
             "audit_mode": getattr(settings, "audit_mode", None) or "monthly",
-            "monthly_max": getattr(settings, "monthly_max", None) or 60,
-            "daily_max": getattr(settings, "daily_max", None) or 3,
+            "monthly_target": _int_or(getattr(settings, "monthly_target", None), 30),
+            "monthly_max": _int_or(getattr(settings, "monthly_max", None), 60),
+            "daily_target": _int_or(getattr(settings, "daily_target", None), 1),
+            "daily_max": _int_or(getattr(settings, "daily_max", None), 3),
+            "short_call_count": _int_or(getattr(settings, "short_call_count", None), 5),
+            "medium_call_count": _int_or(getattr(settings, "medium_call_count", None), 15),
+            "long_call_count": _int_or(getattr(settings, "long_call_count", None), 10),
         }
 
     return {
         "client_id": client_id,
-        "total": 0,
+        "total": 30,
         "audit_calls_per_agent": 0,
         "min_call_duration": 20,
         "max_call_duration": 3600,
@@ -254,9 +300,17 @@ def _settings_response(
         "enable_sales_category_filter": 0,
         "sales_interested_values": [],
         "sales_not_interested_values": [],
+        "sales_interested_audit_count": 0,
+        "sales_not_interested_audit_count": 0,
+        "sales_prioritize_interested": 1,
         "audit_mode": "monthly",
+        "monthly_target": 30,
         "monthly_max": 60,
+        "daily_target": 1,
         "daily_max": 3,
+        "short_call_count": 5,
+        "medium_call_count": 15,
+        "long_call_count": 10,
     }
 
 

@@ -23,9 +23,68 @@ CREATE TABLE IF NOT EXISTS coaching_queue (
   evidence TEXT,
   score_at_flag DECIMAL(5,1) DEFAULT NULL,
   reason VARCHAR(255) DEFAULT NULL,
+  trainer_name VARCHAR(255) NULL,
+  trainer_id VARCHAR(64) NULL,
+  coaching_type VARCHAR(64) NULL,
+  resolution_remarks TEXT NULL,
+  resolved_by VARCHAR(255) NULL,
+  completed_by VARCHAR(255) NULL,
+  completed_by_id VARCHAR(64) NULL,
+  resolved_at TIMESTAMP NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Idempotently add the tracking columns to databases created by older versions.
+DROP PROCEDURE IF EXISTS calliq_add_coaching_tracking_columns;
+DELIMITER $$
+CREATE PROCEDURE calliq_add_coaching_tracking_columns()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'trainer_name') THEN
+    ALTER TABLE coaching_queue ADD COLUMN trainer_name VARCHAR(255) NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'trainer_id') THEN
+    ALTER TABLE coaching_queue ADD COLUMN trainer_id VARCHAR(64) NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'coaching_type') THEN
+    ALTER TABLE coaching_queue ADD COLUMN coaching_type VARCHAR(64) NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'resolution_remarks') THEN
+    ALTER TABLE coaching_queue ADD COLUMN resolution_remarks TEXT NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'resolved_by') THEN
+    ALTER TABLE coaching_queue ADD COLUMN resolved_by VARCHAR(255) NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'completed_by') THEN
+    ALTER TABLE coaching_queue ADD COLUMN completed_by VARCHAR(255) NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'completed_by_id') THEN
+    ALTER TABLE coaching_queue ADD COLUMN completed_by_id VARCHAR(64) NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coaching_queue'
+                   AND COLUMN_NAME = 'resolved_at') THEN
+    ALTER TABLE coaching_queue ADD COLUMN resolved_at TIMESTAMP NULL;
+  END IF;
+END$$
+DELIMITER ;
+
+CALL calliq_add_coaching_tracking_columns();
+DROP PROCEDURE IF EXISTS calliq_add_coaching_tracking_columns;
 
 -- ---------------------------------------------------------------------------
 -- 2. ai_prompts  (already used by the app; included for a fresh database)

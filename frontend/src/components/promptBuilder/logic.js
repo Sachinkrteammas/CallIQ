@@ -28,6 +28,7 @@ export function assemblePrompt(config) {
   const p = preamble || {}
   const universal = outputSchema.universalBase || []
   const custom = outputSchema.customFields || []
+  const generatedText = String(config.generatedPromptText || '').trim()
 
   const lines = []
   lines.push(`You are an expert QA auditor.`)
@@ -57,6 +58,12 @@ export function assemblePrompt(config) {
     lines.push('')
     lines.push(`SCORING INSTRUCTIONS`)
     lines.push(escapeHtml(p.scoringInstructions))
+  }
+
+  if (generatedText) {
+    lines.push('')
+    lines.push(`PROCESS INSTRUCTIONS (GENERATED FROM DOCUMENTS)`)
+    lines.push(escapeHtml(generatedText))
   }
 
   if (parameters && parameters.length) {

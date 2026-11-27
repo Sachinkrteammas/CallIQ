@@ -4,7 +4,7 @@ import { Card, SectionTitle, ProgressBar, SeverityBadge } from '../components/sh
 import AudioPlayer from '../components/AudioPlayer.jsx'
 import { useAudioPlayer } from '../hooks/useAudioPlayer.js'
 import { getCallDetail } from '../api/client.js'
-import { ArrowLeft, CheckCircle2, AlertTriangle, Search, Play, VolumeX, RefreshCw } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, AlertTriangle, Search, Play, VolumeX, RefreshCw, ClipboardCheck, ShieldAlert } from 'lucide-react'
 
 const markerColor = { info: '#3457D5', amber: '#C9862B', red: '#D14343', green: '#1C9A6C' }
 
@@ -39,6 +39,14 @@ export default function CallDetails() {
   }, [id])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    if (call && window.location.hash === '#evaluation') {
+      window.setTimeout(() => {
+        document.getElementById('evaluation')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 150)
+    }
+  }, [call])
 
   const { currentTime, duration, playing, volume, rate, setVolume, setRate, toggle, seek, seekByTimestamp, unavailable } =
     useAudioPlayer({ src: call?.recording_path, durationSec: call?.duration_sec ?? 0 })
@@ -279,8 +287,10 @@ export default function CallDetails() {
             <SectionTitle>AI Conversation Score</SectionTitle>
             <div className="text-center mb-4">
               <div className="text-4xl font-extrabold text-[#1D2433]">
-                {call.has_audit === false || call.audit_pending || call.scores?.overall == null ? '—' : call.scores.overall}
-                <span className="text-lg">{call.has_audit === false || call.audit_pending || call.scores?.overall == null ? '' : '%'}</span>
+                {call.has_audit === false || call.audit_pending || (call.percentage == null && call.scores?.overall == null)
+                  ? '—'
+                  : (call.percentage ?? call.scores.overall)}
+                <span className="text-lg">{(call.has_audit === false || call.audit_pending || (call.percentage == null && call.scores?.overall == null)) ? '' : '%'}</span>
               </div>
               <div className="text-xs text-[#6B7385]">
                 {call.has_audit === false || call.audit_pending ? 'Audit Pending' : 'Overall Conversation Score'}
@@ -293,6 +303,90 @@ export default function CallDetails() {
             ) : parameterEntries.map((p) => (
               <ProgressBar key={p.key} label={p.label} value={p.percentage || 0} />
             ))}
+          </Card>
+
+          {/* Complete Audit Evaluation */}
+          <Card id="evaluation" className="scroll-mt-4">
+            <div className="flex items-center justify-between mb-3">
+              <SectionTitle>Complete Audit Evaluation</SectionTitle>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                call.has_audit === false ? 'bg-[#F0EDE4] text-[#6B7385]' : 'bg-[#E7F7EF] text-[#1C9A6C]'
+              }`}>
+                {call.status || (call.has_audit === false ? 'Pending' : 'Completed')}
+              </span>
+            </div>
+
+            {call.has_audit === false ? (
+              <div className="text-xs text-[#6B7385] bg-[#F7F4EE] border border-[#E7E2D8] rounded-xl p-3">
+                {call.processing_error || 'No IQ evaluation exists for this call yet. Run an IQ audit after an active prompt is configured and a usable transcript is available.'}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {(call.fatal_errors || []).length > 0 && (
+                  <div className="p-3 rounded-xl bg-[#FBE9E9] border border-[#D14343]/30">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-[#D14343] mb-1">
+                      <AlertTriangle size={13} /> Fatal Errors ({(call.fatal_errors || []).length})
+                    </div>
+                    {(call.fatal_errors || []).map((f, i) => (
+                      <div key={i} className="text-[11px] text-[#1D2433]">
+                        <span className="font-semibold">{f.name || 'Fatal rule'}</span>
+                        {f.detail ? ` — ${f.detail}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {(call.critical_failures || []).length > 0 && (
+                  <div className="p-3 rounded-xl bg-[#FCF1DF] border border-[#C9862B]/30">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-[#C9862B] mb-1">
+                      <ShieldAlert size={13} /> Critical Parameter Failures ({(call.critical_failures || []).length})
+                    </div>
+                    {(call.critical_failures || []).map((f, i) => (
+                      <div key={i} className="text-[11px] text-[#1D2433]">
+                        <span className="font-semibold">{f.name || f.detail}</span>
+                        {f.name && f.detail ? ` — ${f.detail}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!(call.fatal_errors || []).length && !(call.critical_failures || []).length && (
+                  <div className="text-[11px] text-[#1C9A6C] font-semibold">No fatal rules or critical parameters failed.</div>
+                )}
+
+                <div>
+                  <div className="text-[11px] font-bold text-[#6B7385] mb-1">Parameter scores</div>
+                  {parameterEntries.length ? parameterEntries.map((p) => (
+                    <ProgressBar key={p.key} label={p.label} value={p.percentage || 0} />
+                  )) : (
+                    <div className="text-[11px] text-[#6B7385]">No parameter breakdown available.</div>
+                  )}
+                </div>
+
+                {(call.summary || (call.evaluation || {})?.summary) && (
+                  <div>
+                    <div className="text-[11px] font-bold text-[#6B7385] mb-1">Summary</div>
+                    <p className="text-xs text-[#1D2433]">{call.summary || call.evaluation.summary}</p>
+                  </div>
+                )}
+                {((call.recommendations || []).length > 0 || ((call.evaluation || {})?.recommendations || []).length > 0) && (
+                  <div>
+                    <div className="text-[11px] font-bold text-[#6B7385] mb-1">Recommendations</div>
+                    <ul className="list-disc pl-5 text-xs text-[#1D2433] space-y-0.5">
+                      {(call.recommendations?.length ? call.recommendations : call.evaluation.recommendations || []).map((r, i) => (
+                        <li key={i}>{typeof r === 'string' ? r : r.detail || JSON.stringify(r)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <details className="text-[11px]">
+                  <summary className="cursor-pointer font-semibold text-[#3457D5] flex items-center gap-1">
+                    <ClipboardCheck size={12} /> View raw evaluation JSON
+                  </summary>
+                  <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-[#F7F4EE] p-2 text-[10px] whitespace-pre-wrap break-all">
+                    {JSON.stringify(call.evaluation || call.audit_json || {}, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            )}
           </Card>
 
           {/* AI Detected Behaviours */}
@@ -354,7 +448,7 @@ export default function CallDetails() {
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="p-2 rounded-lg bg-[#F7F4EE]">
                   <div className="text-[#6B7385]">Avg Score</div>
-                  <div className="font-bold text-[#1D2433]">{agent.avg_score}%</div>
+                  <div className="font-bold text-[#1D2433]">{call.agent_avg_score ?? agent.avg_score ?? 0}%</div>
                 </div>
                 <div className="p-2 rounded-lg bg-[#F7F4EE]">
                   <div className="text-[#6B7385]">Risk</div>

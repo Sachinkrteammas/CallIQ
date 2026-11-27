@@ -72,6 +72,17 @@ def parameter_meta_from_config(config: Any) -> List[Dict[str, Any]]:
         if key in used:
             key = f"{key}_{index + 1}"
         used.add(key)
+        questions = param.get("questions") or []
+        critical_questions = [
+            str(q.get("name") or q.get("id") or "")
+            for q in questions
+            if isinstance(q, dict)
+            and (
+                str(q.get("priority") or "").lower() == "critical"
+                or q.get("fatal")
+                or q.get("hardRule")
+            )
+        ]
         meta.append({
             "key": key,
             "id": param.get("id"),
@@ -79,6 +90,11 @@ def parameter_meta_from_config(config: Any) -> List[Dict[str, Any]]:
             "weight": _to_float(param.get("weight"), 0.0),
             "priority": param.get("priority"),
             "description": param.get("description") or "",
+            "critical_questions": [q for q in critical_questions if q],
+            "critical": bool(
+                str(param.get("priority") or "").lower() == "critical"
+                or critical_questions
+            ),
         })
     return meta
 

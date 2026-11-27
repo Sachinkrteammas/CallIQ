@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { listClients } from '../api/client.js'
+import { listClients, setApiClientType } from '../api/client.js'
 import { useAuth } from './AuthContext.jsx'
 
 const ClientContext = createContext(null)
@@ -15,19 +15,23 @@ export function getDateRange(days) {
 }
 
 function resolveType(c) {
+  // Canonical backend rule: empty ingroups = Sales, otherwise Service.
   if (c.type === 'Sales' || c.type === 'Service') return c.type
-  const ig = (c.ingroups || '').trim()
-  const cp = (c.campaigns || '').trim()
-  if (!ig) return 'Sales'
-  if (!cp) return 'Service'
-  return 'Sales'
+  return (c.ingroups || '').trim() ? 'Service' : 'Sales'
+}
+
+const typeFromUser = (user) => {
+  const raw = String(user?.client_type || '').toLowerCase()
+  if (raw === 'service') return 'Service'
+  if (raw === 'sales') return 'Sales'
+  return null
 }
 
 export function ClientProvider({ children }) {
-  const { isClientUser, clientId: userClientId } = useAuth() || {}
+  const { user, isClientUser, clientId: userClientId } = useAuth() || {}
   const [allClients, setAllClients] = useState([])
   const [loading, setLoading] = useState(true)
-  const [clientType, setClientType] = useState('Sales')
+  const [clientType, setClientType] = useState(() => typeFromUser(user) || 'Sales')
   const [clientId, setClientId] = useState('all')
   const [fromDate, setFromDate] = useState(() => getDateRange(90).from)
   const [toDate, setToDate] = useState(() => getDateRange(90).to)
@@ -68,6 +72,23 @@ export function ClientProvider({ children }) {
   }, [isClientUser, userClientId, refreshClients])
 
   const clients = allClients.filter((c) => !clientType || c.type === clientType)
+
+  // Propagate the active scope to every API call and keep the selection valid.
+  useEffect(() => { setApiClientType(clientType) }, [clientType])
+
+  useEffect(() => {
+    if (!isClientUser) return
+    const userType = typeFromUser(user)
+    if (userType && userType !== clientType) setClientType(userType)
+    if (userClientId && clientId !== Number(userClientId)) setClientId(Number(userClientId))
+  }, [isClientUser, user, userClientId, clientType, clientId])
+
+  useEffect(() => {
+    // A client user's ID is fixed by login. Do not reset it while the typed
+    // client list is still loading, or a stale saved type can cause a loop.
+    if (isClientUser || !clients.length || clientId === 'all') return
+    if (!clients.some((c) => c.id === clientId)) setClientId('all')
+  }, [clients, clientId, isClientUser])
 
   const handleSetClientType = useCallback((t) => {
     setClientType(t)

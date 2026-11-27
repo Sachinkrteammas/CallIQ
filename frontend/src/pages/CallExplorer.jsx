@@ -1,11 +1,11 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, SeverityBadge, EmptyState } from '../components/shared.jsx'
-import { listCalls } from '../api/client.js'
+import { listCalls, runIqAudit } from '../api/client.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
 import {
   Search, ChevronLeft, ChevronRight, ArrowUpDown, Calendar,
-  RefreshCw, Building2, Filter, X
+  RefreshCw, Building2, Filter, X, AlertTriangle, ShieldAlert, ClipboardCheck
 } from 'lucide-react'
 
 function getDateRange(days) {
@@ -40,6 +40,15 @@ const bandColor = {
   Pending: 'bg-[#F0EDE4] text-[#6B7385]',
 }
 
+const statusColor = {
+  Completed: 'bg-[#E7F7EF] text-[#1C9A6C]',
+  'Awaiting Audit': 'bg-[#EEF1FE] text-[#3457D5]',
+  Pending: 'bg-[#F0EDE4] text-[#6B7385]',
+  'Recording Missing': 'bg-[#FCF1DF] text-[#C9862B]',
+  'No Speech': 'bg-[#FCF1DF] text-[#C9862B]',
+  'Transcript Failed': 'bg-[#FBE9E9] text-[#D14343]',
+}
+
 
 export default function CallExplorer() {
   const [searchParams] = useSearchParams()
@@ -55,11 +64,15 @@ export default function CallExplorer() {
   const [sortKey, setSortKey] = useState('date')
   const [sortDir, setSortDir] = useState('desc')
   const [search, setSearch] = useState(searchParams.get('q') || '')
+  const [auditing, setAuditing] = useState(false)
+  const [auditMessage, setAuditMessage] = useState(null)
   const pageSize = 20
 
   // Filters
   const [bandFilter, setBandFilter] = useState(searchParams.get('band') || '')
   const [agentFilter, setAgentFilter] = useState(searchParams.get('agent_id') || '')
+  const [processFilter, setProcessFilter] = useState(searchParams.get('process') || '')
+  const [behaviourFilter, setBehaviourFilter] = useState(searchParams.get('behaviour') || '')
   const [saleCategory, setSaleCategory] = useState('')
   const [invalidReason, setInvalidReason] = useState('')
   const [crmSaleDone, setCrmSaleDone] = useState('')
@@ -70,8 +83,12 @@ export default function CallExplorer() {
   useEffect(() => {
     const bandFromUrl = searchParams.get('band')
     const agentFromUrl = searchParams.get('agent_id')
+    const processFromUrl = searchParams.get('process')
+    const behaviourFromUrl = searchParams.get('behaviour')
     if (bandFromUrl !== null && bandFromUrl !== bandFilter) setBandFilter(bandFromUrl || '')
     if (agentFromUrl !== null && agentFromUrl !== agentFilter) setAgentFilter(agentFromUrl || '')
+    if (processFromUrl !== null && processFromUrl !== processFilter) setProcessFilter(processFromUrl || '')
+    if (behaviourFromUrl !== null && behaviourFromUrl !== behaviourFilter) setBehaviourFilter(behaviourFromUrl || '')
   }, [searchParams])
 
   const fetchCalls = useCallback(() => {
@@ -88,6 +105,8 @@ export default function CallExplorer() {
     if (clientType) params.client_type = clientType
     if (bandFilter) params.band = bandFilter
     if (agentFilter) params.agent_id = agentFilter
+    if (processFilter) params.process = processFilter
+    if (behaviourFilter) params.behaviour = behaviourFilter
     if (saleCategory) params.sale_category = saleCategory
     if (invalidReason) params.invalid_reason = invalidReason
     if (crmSaleDone) params.crm_sale_done = crmSaleDone === 'true'
@@ -106,10 +125,53 @@ export default function CallExplorer() {
         setError(err.message || 'Failed to load calls')
         setLoading(false)
       })
-  }, [clientId, clientType, fromDate, toDate, page, bandFilter, agentFilter, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation, search])
+  }, [clientId, clientType, fromDate, toDate, page, bandFilter, agentFilter, processFilter, behaviourFilter, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation, search])
 
   useEffect(() => { fetchCalls() }, [fetchCalls])
-  useEffect(() => { setPage(1) }, [clientId, fromDate, toDate, bandFilter, agentFilter, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation])
+  useEffect(() => { setPage(1) }, [clientId, fromDate, toDate, bandFilter, agentFilter, processFilter, behaviourFilter, saleCategory, invalidReason, crmSaleDone, customerConfirmation, orderInformation])
+
+  useEffect(() => {
+    const onStart = () => {
+      setAuditing(true)
+      setAuditMessage('IQ audit pipeline started…')
+    }
+    const onComplete = (event) => {
+      setAuditing(false)
+      const run = event.detail || {}
+      if (run.status === 'failed') {
+        setAuditMessage(`Pipeline finished with errors: ${run.error || 'see prompt builder'}`)
+      } else {
+        setAuditMessage(`Pipeline completed · ${run.audited || 0} call(s) audited.`)
+      }
+      fetchCalls()
+    }
+    window.addEventListener('calliq:pipeline-start', onStart)
+    window.addEventListener('calliq:pipeline-complete', onComplete)
+    return () => {
+      window.removeEventListener('calliq:pipeline-start', onStart)
+      window.removeEventListener('calliq:pipeline-complete', onComplete)
+    }
+  }, [fetchCalls])
+
+  const runSampleAudit = async () => {
+    setAuditing(true)
+    setAuditMessage(null)
+    try {
+      const payload = { limit: 10 }
+      if (clientId && clientId !== 'all') payload.client_id = Number(clientId)
+      const result = await runIqAudit(payload)
+      const count = result.audited || 0
+      setAuditMessage(
+        `IQ audit finished · ${count} call(s) audited.`
+        + (result.errors?.length ? ` ${result.errors.length} error(s): ${result.errors[0]}` : '')
+      )
+      fetchCalls()
+    } catch (err) {
+      setAuditMessage(err.response?.data?.detail || err.message || 'IQ audit failed')
+    } finally {
+      setAuditing(false)
+    }
+  }
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -147,6 +209,13 @@ export default function CallExplorer() {
     navigate(`/calls?${p.toString()}`, { replace: true })
   }
 
+  const clearUrlFilter = (key, setter) => () => {
+    setter('')
+    const p = new URLSearchParams(searchParams)
+    p.delete(key)
+    navigate(`/calls?${p.toString()}`, { replace: true })
+  }
+
   const formatDuration = (sec) => {
     if (sec === null || sec === undefined) return '—'
     const total = Math.round(Number(sec))
@@ -177,11 +246,24 @@ export default function CallExplorer() {
             {isAllClients ? 'All Clients' : selectedClient ? selectedClient.name : 'No client selected'} Â· {fromDate} to {toDate}
           </p>
         </div>
-        <span className="text-xs text-[#6B7385] font-medium">{total} calls found</span>
+        <div className="flex items-center gap-3">
+          {auditMessage && (
+            <span className="text-[11px] font-medium text-[#6B7385] max-w-[340px] text-right">{auditMessage}</span>
+          )}
+          <button
+            onClick={runSampleAudit}
+            disabled={auditing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#3457D5] text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50 transition"
+          >
+            <RefreshCw size={13} className={auditing ? 'animate-spin' : ''} />
+            {auditing ? 'Auditing…' : 'Run IQ Audit'}
+          </button>
+          <span className="text-xs text-[#6B7385] font-medium">{total} calls found</span>
+        </div>
       </div>
 
       {/* Active filters */}
-      {(bandFilter || agentFilter) && (
+      {(bandFilter || agentFilter || processFilter || behaviourFilter) && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-[#6B7385] font-semibold">Active filters:</span>
           {bandFilter && (
@@ -198,6 +280,18 @@ export default function CallExplorer() {
             <span className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-[#EEF1FE] text-[#3457D5]">
               Agent: {agentFilter}
               <button onClick={clearAgentFilter} className="hover:opacity-70"><X size={10} /></button>
+            </span>
+          )}
+          {processFilter && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-[#EEF7F2] text-[#1C9A6C]">
+              Process: {processFilter}
+              <button onClick={clearUrlFilter('process', setProcessFilter)} className="hover:opacity-70"><X size={10} /></button>
+            </span>
+          )}
+          {behaviourFilter && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-[#FDF1E4] text-[#C9862B]">
+              Behaviour: {behaviourFilter}
+              <button onClick={clearUrlFilter('behaviour', setBehaviourFilter)} className="hover:opacity-70"><X size={10} /></button>
             </span>
           )}
         </div>
@@ -356,7 +450,9 @@ export default function CallExplorer() {
               <thead>
                 <tr className="text-left text-[10px] text-[#6B7385] font-semibold uppercase border-b border-[#E7E2D8]">
                   <th className="py-2 pr-3">Call ID</th>
+                  <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3">Agent</th>
+                  <th className="py-2 pr-3">Agent Avg</th>
                   <th className="py-2 pr-3">Date</th>
                   <th className="py-2 pr-3 cursor-pointer hover:text-[#1D2433]" onClick={() => toggleSort('duration')}>
                     <span className="flex items-center gap-1">Duration <ArrowUpDown size={10} /></span>
@@ -372,6 +468,7 @@ export default function CallExplorer() {
                   <th className="py-2 pr-3">CRM Tag</th>
                   <th className="py-2 pr-3">Confirmation</th>
                   <th className="py-2 pr-3">Order Info</th>
+                  <th className="py-2 pr-3">Evaluation</th>
                 </tr>
               </thead>
               <tbody>
@@ -390,7 +487,19 @@ export default function CallExplorer() {
                       <td className="py-2.5 pr-3 font-semibold text-[#3457D5] whitespace-nowrap">
                         {(c._call_id || '').slice(0, 20)}
                       </td>
+                      <td className="py-2.5 pr-3">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusColor[c.status] || statusColor.Pending}`}>
+                          {c.status || 'Pending'}
+                        </span>
+                        {c.processing_error && <div className="text-[9px] text-[#D14343] mt-0.5">{c.processing_error}</div>}
+                      </td>
                       <td className="py-2.5 pr-3 font-medium text-[#1D2433]">{c._agent_name || c._agent_id || '—'}</td>
+                      <td className="py-2.5 pr-3 text-xs font-semibold text-[#1D2433]">
+                        {c.agent_total_audits ? `${c.agent_avg_score ?? '—'}%` : '—'}
+                        {c.agent_total_audits > 0 && (
+                          <div className="text-[9px] font-normal text-[#6B7385]">{c.agent_total_audits} audits</div>
+                        )}
+                      </td>
                       <td className="py-2.5 pr-3 text-[#6B7385] text-xs whitespace-nowrap">{(c._created_at || '').slice(0, 10)}</td>
                       <td className="py-2.5 pr-3 text-xs font-medium text-[#1D2433]">{formatDuration(c._duration)}</td>
                       <td className="py-2.5 pr-3">
@@ -407,12 +516,42 @@ export default function CallExplorer() {
                       <td className="py-2.5 pr-3">
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${rankingColor[ranking] || bandColor[ranking] || 'bg-[#F0EDE4] text-[#6B7385]'}`}>{ranking}</span>
                       </td>
-                      <td className="py-2.5 pr-3">{audited && c.fatal_flag ? (<span className="text-[10px] font-bold text-[#D14343] bg-[#FBE9E9] px-2 py-0.5 rounded-full">Fatal</span>) : (<span className="text-[10px] font-medium text-[#6B7385]">—</span>)}</td>
+                      <td className="py-2.5 pr-3">
+                        <div className="flex flex-col gap-0.5">
+                          {audited && c.fatal_flag && (
+                            <span className="w-fit text-[10px] font-bold text-[#D14343] bg-[#FBE9E9] px-2 py-0.5 rounded-full">Fatal</span>
+                          )}
+                          {(c.fatal_errors || []).length > 0 && (
+                            <span className="w-fit text-[9px] font-bold text-[#D14343] flex items-center gap-0.5">
+                              <AlertTriangle size={9} /> {c.fatal_errors.length} fatal rule(s)
+                            </span>
+                          )}
+                          {(c.critical_failures || []).length > 0 && (
+                            <span className="w-fit text-[9px] font-bold text-[#C9862B] flex items-center gap-0.5">
+                              <ShieldAlert size={9} /> {c.critical_failures.length} critical
+                            </span>
+                          )}
+                          {(!audited || (!c.fatal_flag && !(c.fatal_errors || []).length && !(c.critical_failures || []).length)) && (
+                            <span className="text-[10px] font-medium text-[#6B7385]">—</span>
+                          )}
+                        </div>
+                      </td>
                       <td className="py-2.5 pr-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${saleCategoryColor[audited ? c.sale_category : 'Pending'] || 'bg-[#F0EDE4] text-[#6B7385]'}`}>{audited ? (c.sale_category || 'Unknown') : 'Pending'}</span></td>
                       <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{audited ? (c.invalid_reason || '—') : '—'}</td>
                       <td className="py-2.5 pr-3"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${audited && c.crm_sale_done ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#F0EDE4] text-[#6B7385]'}`}>{audited && c.crm_sale_done ? 'Done' : (audited ? 'Not Done' : 'Pending')}</span></td>
                       <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{audited ? (c.customer_confirmation || '—') : 'Pending'}</td>
                       <td className="py-2.5 pr-3 text-[#6B7385] text-xs">{audited ? (c.order_information || '—') : 'Pending'}</td>
+                      <td className="py-2.5 pr-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            navigate(`/calls/${c._call_id || c._id}#evaluation`)
+                          }}
+                          className="flex items-center gap-1 text-[10px] font-semibold text-[#3457D5] hover:underline"
+                        >
+                          <ClipboardCheck size={11} /> {audited ? 'View' : 'Pending'}
+                        </button>
+                      </td>
                     </tr>
                   )
                 })}

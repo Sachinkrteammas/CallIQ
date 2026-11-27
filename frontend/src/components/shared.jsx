@@ -3,9 +3,10 @@ import { ArrowUpRight, ArrowDownRight, Inbox } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { LineChart, Line, ResponsiveContainer } from 'recharts'
 
-export function Card({ children, className = '', onClick }) {
+export function Card({ children, className = '', onClick, ...rest }) {
   return (
     <div
+      {...rest}
       onClick={onClick}
       className={`bg-white rounded-xl border border-[#E7E2D8] shadow-sm p-5 ${onClick ? 'cursor-pointer hover:border-[#3457D5]/40 hover:shadow-md transition-all' : ''} ${className}`}
     >

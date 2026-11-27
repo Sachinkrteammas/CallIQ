@@ -18,8 +18,10 @@ calliq/
   weekly score trend chart — every KPI card is clickable and drills into a filtered
   Call Explorer.
 - **Conversation Intelligence** (new core tab): behaviour distribution cards with
-  sparklines, an interactive team × behaviour heatmap, and a scrollable Top AI Findings
-  feed.
+  sparklines, a process × behaviour heatmap built from dynamically configured client
+  processes (configurable campaigns/ingroups such as LPNO or MAPL), with agent and queue
+  views, loading/empty states, and cell drill-down into calls filtered by process and
+  behaviour. Top AI Findings are derived from real audited calls.
 - **Call Audit Log / Call Explorer**: searchable, filterable, paginated call table.
 - **Call Details**: colour-coded AI conversation timeline, speaker-separated transcript,
   AI Conversation Score panel (8 dimensions), AI Detected Behaviours with confidence and
@@ -27,7 +29,9 @@ calliq/
 - **Red Flags → Incident Management Center**: Critical/Major/Minor incident cards with
   assign/resolve actions, plus an admin **Fatal Behaviour Rules** panel with toggles.
 - **Agent Scorecards**: Team Health cards, full leaderboard (conversation/sentiment/
-  compliance/risk/trend), AI Coaching Recommendations.
+  compliance/risk/trend), AI Coaching Recommendations with full completion tracking:
+  trainer name/ID, coaching type (Assigned Training, Refresher Training, Feedback
+  Sessions), resolution remarks, and the authenticated user who completed the activity.
 - **Alert Center**: live alert feed with assign/resolve actions and a sample critical-alert
   email preview.
 - **Settings**: notification rules (trigger → channel → frequency) with toggles.
@@ -85,6 +89,52 @@ npm run preview      # serve the production build locally
 For a real deployment, serve `frontend/dist` from any static host (or from FastAPI itself
 via `StaticFiles`) and point it at your deployed FastAPI URL — update the `baseURL` in
 `frontend/src/api/client.js` or set up a reverse-proxy rule equivalent to the Vite proxy.
+
+## Prompt Builder: SOP generation and testing
+
+- The UI guides users through five tracked steps: **Upload documents → Generate
+  prompt → Customise & validate → Review & test → Save & activate**. Each step is
+  marked complete automatically, and every step is clickable.
+- Upload SOP/FAQ/guideline files (PDF, DOCX, TXT, MD, JSON; max 20 MB) for a client;
+  the whole document text is extracted and can be previewed in the UI.
+- `PATCH /api/settings/ai-prompts/documents/{doc_id}` replaces a document and
+  re-extracts its text. `DELETE /api/settings/ai-prompts/documents/{doc_id}`
+  removes it. Both require the owning `client_id`.
+- `POST /api/settings/ai-prompts/generate-from-docs` turns those documents into a
+  prompt name/description/sections/parameters plus `generatedPromptText`, and saves
+  a Draft. The generated instructions remain editable and are included in the
+  assembled prompt sent to the AI auditor. The response includes `fallback: true`
+  when LLM analysis was unavailable and a generic process template was used.
+- Activation is blocked until validation passes and a successful test has been run
+  against the current prompt configuration.
+- `POST /api/settings/ai-prompts/test` audits a pasted transcript with the current
+  draft (or the client's active prompt when no draft text is supplied).
+- `POST /api/settings/ai-prompts/test-audio` accepts multipart `client_id`, `file`
+  (audio, max 50 MB), optional `prompt_text`, `config` (JSON string) and `note`.
+  It transcribes the call with the configured STT service, then audits the
+  transcript with the same prompt. Response: `{ok, result, transcript, note}`.
+  In the UI: **Prompt Builder → Prompt Testing → Upload call audio → Transcribe & Test Audio**.
+
+## Client Settings — audit configuration
+
+`GET /api/client-settings/{client_id}` and `POST /api/client-settings` now round-trip
+the full audit configuration: monthly/daily min + max targets, Short/Medium/Long
+call counts and thresholds, campaign/ingroup filters, and the sales-category
+audit filter (`enable_sales_category_filter`, `sales_interested_values`,
+`sales_not_interested_values`). `total` is auto-derived from the configured min
+target (Monthly or Daily) and changing the target rebalances the Short/Medium/Long
+split; duration counts are only a fallback when no target is set. Filter fields
+are returned as arrays and accept any number of comma-separated values in the UI.
+
+The sales-category filter also persists per-category audit allocation:
+`sales_interested_audit_count`, `sales_not_interested_audit_count`, and
+`sales_prioritize_interested`.
+
+Sales and Service data are strictly separated. A client is Sales when
+`clients.ingroups` is empty, Service otherwise. All GET requests carry the
+active `client_type`; a `client_id` from the other view is rejected with HTTP
+400. Report exports accept `client_type` / `client_id` and omit sales-only
+columns in Service exports.
 
 ## Extending it
 

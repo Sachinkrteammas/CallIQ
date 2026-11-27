@@ -34,6 +34,9 @@ class SettingsUpsert(BaseModel):
     enable_sales_category_filter: int = Field(default=0)
     sales_interested_values: List[str] = Field(default_factory=list)
     sales_not_interested_values: List[str] = Field(default_factory=list)
+    sales_interested_audit_count: int = Field(default=0, ge=0)
+    sales_not_interested_audit_count: int = Field(default=0, ge=0)
+    sales_prioritize_interested: int = Field(default=1)
 
 
 class SettingsOut(BaseModel):
@@ -70,3 +73,6 @@ class SettingsOut(BaseModel):
     enable_sales_category_filter: int = 0
     sales_interested_values: List[str] = Field(default_factory=list)
     sales_not_interested_values: List[str] = Field(default_factory=list)
+    sales_interested_audit_count: int = 0
+    sales_not_interested_audit_count: int = 0
+    sales_prioritize_interested: int = 1

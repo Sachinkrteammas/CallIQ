@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from app.core.config import get_settings
-from app.database import engine
+from app.database import SessionLocal, engine
+from app.services.client_scope import scope_where
 from app.routers import kpis, conversation, calls, agents, incidents, alerts, settings as settings_router, client_overview, ai_prompts, auth, client_settings,auth
 from app.routers import reports
 from app.routers import smartping
@@ -40,6 +42,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def enforce_client_type_scope(request, call_next):
+    """Reject a client_id that belongs to the other Sales/Service view."""
+    raw_id = request.query_params.get("client_id")
+    client_type = request.query_params.get("client_type")
+    if raw_id and client_type and str(raw_id).isdigit():
+        db = SessionLocal()
+        try:
+            scope_where(db, int(raw_id), client_type)
+        except Exception as exc:
+            detail = getattr(exc, "detail", "Invalid client selection")
+            return JSONResponse(status_code=400, content={"detail": detail})
+        finally:
+            db.close()
+    return await call_next(request)
+
+
 app.include_router(kpis.router)
 app.include_router(conversation.router)
 app.include_router(calls.router)
@@ -54,8 +74,6 @@ app.include_router(auth.router)
 app.include_router(client_overview.router)
 app.include_router(client_overview.clients_router)
 app.include_router(client_settings.router)
-app.include_router(reports.router)
-app.include_router(reports.router)
 app.include_router(reports.router)
 
 @app.on_event("startup")

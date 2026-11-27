@@ -4,6 +4,52 @@ import { useClientFilter } from '../components/ClientContext.jsx'
 import { getClientSettings, saveClientSettings } from '../api/client.js'
 import { Download, Users, Building2, FileText, AlertTriangle } from 'lucide-react'
 
+// Backend JSON columns may come back as arrays, JSON strings or CSV strings.
+// Normalising here keeps comma-separated filters usable for any number of values.
+const toList = (value) => {
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
+  if (value === null || value === undefined) return []
+  const raw = String(value).trim()
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean)
+    } catch { /* fall through to comma splitting */ }
+  }
+  return raw.split(',').map((v) => v.trim()).filter(Boolean)
+}
+
+const toCsv = (value) => toList(value).join(', ')
+
+// FastAPI validation errors are arrays; React cannot render them directly.
+const errorText = (err, fallback) => {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail.map((d) => (
+      typeof d === 'string' ? d : `${(d.loc || []).join('.') || 'Request'}: ${d.msg || 'invalid value'}`
+    )).join('; ')
+  }
+  return fallback
+}
+
+// Spread a target across Short / Medium / Long using the existing ratio so the
+// duration breakdown always adds up to the auto total.
+const distributeTarget = (counts, target) => {
+  const values = counts.map((n) => Number(n) || 0)
+  const sum = values.reduce((a, b) => a + b, 0)
+  const base = sum > 0 ? values : [1, 0, 0]
+  const goal = Math.max(0, Number(target) || 0)
+  const exact = base.map((n) => (n / (sum > 0 ? sum : 1)) * goal)
+  const result = exact.map(Math.floor)
+  let remaining = goal - result.reduce((a, b) => a + b, 0)
+  const order = exact.map((v, i) => ({ i, frac: v - result[i] })).sort((a, b) => b.frac - a.frac)
+  for (let k = 0; k < order.length && remaining > 0; k += 1, remaining -= 1) {
+    result[order[k].i] += 1
+  }
+  return { short_call_count: result[0], medium_call_count: result[1], long_call_count: result[2] }
+}
+
 function getDefaultForm(clientId) {
   return {
     client_id: clientId,
@@ -40,6 +86,9 @@ function getDefaultForm(clientId) {
     enable_sales_category_filter: 0,
     sales_interested_values: [],
     sales_not_interested_values: [],
+    sales_interested_audit_count: 0,
+    sales_not_interested_audit_count: 0,
+    sales_prioritize_interested: 1,
   }
 }
 
@@ -109,25 +158,29 @@ export default function ClientSettings() {
           return
         }
         setAgentDetails(data.agent_details || [])
+        const mode = data.audit_mode ?? 'monthly'
+        const target = Number(mode === 'monthly' ? (data.monthly_target ?? 30) : (data.daily_target ?? 1)) || 0
+        const durationCounts = distributeTarget(
+          [data.short_call_count ?? 5, data.medium_call_count ?? 15, data.long_call_count ?? 10],
+          target,
+        )
         setForm({
           client_id: clientId,
           audit_calls_per_agent: data.audit_calls_per_agent ?? 0,
-          total: data.total ?? 0,
+          total: target,
           min_call_duration: data.min_call_duration ?? 20,
           max_call_duration: data.max_call_duration ?? 3600,
-          agents: data.agents ?? [],
-          campaign_filter: data.campaign_filter ?? [],
-          ingroup_filter: data.ingroup_filter ?? [],
+          agents: toList(data.agents),
+          campaign_filter: toList(data.campaign_filter),
+          ingroup_filter: toList(data.ingroup_filter),
 
-          audit_mode: data.audit_mode ?? 'monthly',
+          audit_mode: mode,
           monthly_target: data.monthly_target ?? 30,
           monthly_max: data.monthly_max ?? 60,
           daily_target: data.daily_target ?? 1,
           daily_max: data.daily_max ?? 3,
 
-          short_call_count: data.short_call_count ?? 5,
-          medium_call_count: data.medium_call_count ?? 15,
-          long_call_count: data.long_call_count ?? 10,
+          ...durationCounts,
           short_call_max: data.short_call_max ?? 120,
           medium_call_max: data.medium_call_max ?? 600,
 
@@ -142,35 +195,44 @@ export default function ClientSettings() {
           criticality_process_complexity: data.criticality_process_complexity ?? 3,
 
           enable_sales_category_filter: data.enable_sales_category_filter ?? 0,
-          sales_interested_values: Array.isArray(data.sales_interested_values) ? data.sales_interested_values : [],
-          sales_not_interested_values: Array.isArray(data.sales_not_interested_values) ? data.sales_not_interested_values : [],
+          sales_interested_values: toList(data.sales_interested_values),
+          sales_not_interested_values: toList(data.sales_not_interested_values),
+          sales_interested_audit_count: Number(data.sales_interested_audit_count) || 0,
+          sales_not_interested_audit_count: Number(data.sales_not_interested_audit_count) || 0,
+          sales_prioritize_interested: data.sales_prioritize_interested ?? 1,
         })
       })
       .catch((err) => {
         if (!cancelled) {
-          setNotice({ type: 'error', text: err?.response?.data?.detail || 'Failed to load settings' })
+          setNotice({ type: 'error', text: errorText(err, 'Failed to load settings') })
         }
       })
       .finally(() => { if (!cancelled) setSettingsLoading(false) })
     return () => { cancelled = true }
   }, [clientId])
 
+  // Auto total always follows the configured MIN target (Monthly or Daily).
+  // Changing the target also rebalances the Short / Medium / Long split so
+  // the breakdown stays consistent with the total.
   useEffect(() => {
-    const shortN = Number(form.short_call_count) || 0
-    const medN = Number(form.medium_call_count) || 0
-    const longN = Number(form.long_call_count) || 0
-    const durationTotal = shortN + medN + longN
-    const modeTotal = form.audit_mode === 'monthly'
+    const target = form.audit_mode === 'monthly'
       ? Number(form.monthly_target) || 0
       : Number(form.daily_target) || 0
-    const finalTotal = durationTotal > 0 ? durationTotal : modeTotal
-    if (form.total !== finalTotal) {
-      setForm((prev) => ({ ...prev, total: finalTotal }))
-    }
-  }, [
-    form.audit_mode, form.monthly_target, form.daily_target,
-    form.short_call_count, form.medium_call_count, form.long_call_count,
-  ])
+    setForm((prev) => {
+      if (prev.total === target &&
+          prev.short_call_count + prev.medium_call_count + prev.long_call_count === target) {
+        return prev
+      }
+      return {
+        ...prev,
+        total: target,
+        ...distributeTarget(
+          [prev.short_call_count, prev.medium_call_count, prev.long_call_count],
+          target,
+        ),
+      }
+    })
+  }, [form.audit_mode, form.monthly_target, form.daily_target])
 
   useEffect(() => {
     if (!agentDetails.length) return
@@ -188,6 +250,22 @@ export default function ClientSettings() {
     : Number(form.daily_max) || 0
   const maxExceeded = maxValue > 0 && targetValue > maxValue
 
+  const durationTotal = (Number(form.short_call_count) || 0) +
+    (Number(form.medium_call_count) || 0) +
+    (Number(form.long_call_count) || 0)
+  const durationMismatch = durationTotal !== targetValue
+
+  // Manual rebalance when the user has edited the duration split directly.
+  const syncDurationsToTarget = () => {
+    setForm((p) => ({
+      ...p,
+      ...distributeTarget(
+        [p.short_call_count, p.medium_call_count, p.long_call_count],
+        targetValue,
+      ),
+    }))
+  }
+
   const handleSave = async () => {
     if (maxExceeded) {
       setNotice({ type: 'error', text: `Target (${targetValue}) exceeds Maximum (${maxValue})` })
@@ -200,11 +278,18 @@ export default function ClientSettings() {
       await saveClientSettings({
         ...form,
         client_criticality: computedCrit,
-        ingroup_filter: isSales ? [] : form.ingroup_filter,
+        agents: toList(form.agents),
+        campaign_filter: toList(form.campaign_filter),
+        ingroup_filter: isSales ? [] : toList(form.ingroup_filter),
+        sales_interested_values: toList(form.sales_interested_values),
+        sales_not_interested_values: toList(form.sales_not_interested_values),
+        sales_interested_audit_count: Number(form.sales_interested_audit_count) || 0,
+        sales_not_interested_audit_count: Number(form.sales_not_interested_audit_count) || 0,
+        sales_prioritize_interested: form.sales_prioritize_interested ? 1 : 0,
       })
       setNotice({ type: 'success', text: `Settings saved (Criticality: ${computedCrit})` })
     } catch (err) {
-      setNotice({ type: 'error', text: err?.response?.data?.detail || 'Failed to save settings' })
+      setNotice({ type: 'error', text: errorText(err, 'Failed to save settings') })
     }
     setSaving(false)
   }
@@ -213,6 +298,7 @@ export default function ClientSettings() {
     const p = new URLSearchParams()
     if (fromDate) p.set('from_date', fromDate)
     if (toDate) p.set('to_date', toDate)
+    if (clientType) p.set('client_type', clientType)
     return p
   }
 
@@ -235,11 +321,6 @@ export default function ClientSettings() {
 
   const selectedClient = clients.find((c) => c.id === clientId)
   const computedCriticality = computeCriticality(form)
-
-  const shortN = Number(form.short_call_count) || 0
-  const medN = Number(form.medium_call_count) || 0
-  const longN = Number(form.long_call_count) || 0
-  const durationTotal = shortN + medN + longN
 
   if (loading) {
     return (
@@ -432,6 +513,7 @@ export default function ClientSettings() {
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Total Calls (auto)</label>
                   <input readOnly value={form.total}
                     className="rounded-xl border border-[#E7E2D8] bg-[#F0EDE4] px-3 py-2 text-sm font-bold text-[#3457D5]" />
+                  <span className="text-[9px] text-[#6B7385]">Auto = Min Target; changing it updates the split</span>
                 </div>
               </div>
               {maxExceeded && (
@@ -448,7 +530,13 @@ export default function ClientSettings() {
 
             {/* SECTION 2: Duration Distribution */}
             <div className="mb-6 p-4 rounded-xl bg-[#EEF1FE] border border-[#3457D5]/20">
-              <h3 className="text-xs font-bold text-[#1D2433] uppercase mb-1">2. Call Duration Distribution</h3>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <h3 className="text-xs font-bold text-[#1D2433] uppercase">2. Call Duration Distribution</h3>
+                <button type="button" onClick={syncDurationsToTarget} disabled={settingsLoading}
+                  className="text-[10px] font-semibold px-2.5 py-1 rounded-lg bg-white border border-[#3457D5]/40 text-[#3457D5] hover:bg-[#EEF1FE] disabled:opacity-50">
+                  Sync to {targetValue} target
+                </button>
+              </div>
               <p className="text-[10px] text-[#6B7385] mb-3">Distribute target across Short / Medium / Long calls</p>
               <div className="grid grid-cols-3 gap-4 mb-3">
                 <div className="flex flex-col gap-1">
@@ -473,9 +561,14 @@ export default function ClientSettings() {
                     onChange={(e) => setForm((p) => ({ ...p, long_call_count: Number(e.target.value) || 0 }))} />
                 </div>
               </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-white/60">
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white/60">
                 <span className="text-[11px] font-semibold text-[#1D2433]">
                   Duration Total: <span className="text-[#3457D5]">{durationTotal}</span> calls
+                  {durationMismatch && (
+                    <span className="ml-2 text-[10px] font-normal text-[#D14343]">
+                      (target is {targetValue} — click Sync)
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-4 mt-4">
@@ -575,8 +668,10 @@ export default function ClientSettings() {
                   <label className="text-[10px] font-semibold text-[#6B7385] uppercase">Campaign Filter</label>
                   <input disabled={settingsLoading}
                     className="rounded-xl border border-[#E7E2D8] bg-white px-3 py-2 text-sm"
-                    value={form.campaign_filter.length ? form.campaign_filter.join(',') : ''}
-                    onChange={(e) => setForm((p) => ({ ...p, campaign_filter: e.target.value.split(',').filter(Boolean) }))} />
+                    value={toCsv(form.campaign_filter)}
+                    placeholder="Campaign-A, Campaign-B, Campaign-C"
+                    onChange={(e) => setForm((p) => ({ ...p, campaign_filter: toList(e.target.value) }))} />
+                  <span className="text-[9px] text-[#6B7385]">Comma separated — multiple campaigns supported.</span>
                 </div>
               </div>
             </div>
@@ -586,7 +681,9 @@ export default function ClientSettings() {
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h3 className="text-xs font-bold text-[#1D2433] uppercase">6. Sales Category Audit Filter</h3>
-                  <p className="text-[10px] text-[#6B7385] mt-0.5">Interested/Not Interested ko choose karke audit hone dene ka setting</p>
+                  <p className="text-[10px] text-[#6B7385] mt-0.5">
+                    Select the interested / not-interested categories and set how many calls to audit in each.
+                  </p>
                 </div>
                 <label className="flex items-center gap-2 text-xs font-semibold text-[#1D2433]">
                   <input type="checkbox"
@@ -599,23 +696,44 @@ export default function ClientSettings() {
               {!!form.enable_sales_category_filter && (
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-semibold text-[#1C9A6C] uppercase">Interested (comma separated)</label>
+                    <label className="text-[10px] font-semibold text-[#1C9A6C] uppercase">Interested categories (comma separated)</label>
                     <input disabled={settingsLoading}
                       className="rounded-xl border border-[#1C9A6C]/30 bg-white px-3 py-2 text-sm"
-                      value={(form.sales_interested_values || []).join(',')}
-                      onChange={(e) => setForm((p) => ({ ...p, sales_interested_values: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))}
+                      value={toCsv(form.sales_interested_values)}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_interested_values: toList(e.target.value) }))}
                       placeholder="Interested, Sale, Converted" />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-semibold text-[#D14343] uppercase">Not Interested (comma separated)</label>
+                    <label className="text-[10px] font-semibold text-[#D14343] uppercase">Not-interested categories (comma separated)</label>
                     <input disabled={settingsLoading}
                       className="rounded-xl border border-[#D14343]/30 bg-white px-3 py-2 text-sm"
-                      value={(form.sales_not_interested_values || []).join(',')}
-                      onChange={(e) => setForm((p) => ({ ...p, sales_not_interested_values: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))}
+                      value={toCsv(form.sales_not_interested_values)}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_not_interested_values: toList(e.target.value) }))}
                       placeholder="Not Interested, DNC, Rejected" />
                   </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-semibold text-[#1C9A6C] uppercase">Audits for interested calls</label>
+                    <input type="number" min="0" disabled={settingsLoading}
+                      className="rounded-xl border border-[#1C9A6C]/30 bg-white px-3 py-2 text-sm"
+                      value={form.sales_interested_audit_count}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_interested_audit_count: Number(e.target.value) || 0 }))} />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-semibold text-[#D14343] uppercase">Audits for not-interested calls</label>
+                    <input type="number" min="0" disabled={settingsLoading}
+                      className="rounded-xl border border-[#D14343]/30 bg-white px-3 py-2 text-sm"
+                      value={form.sales_not_interested_audit_count}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_not_interested_audit_count: Number(e.target.value) || 0 }))} />
+                  </div>
+                  <label className="col-span-2 flex items-center gap-2 text-[11px] font-semibold text-[#1D2433]">
+                    <input type="checkbox"
+                      checked={!!form.sales_prioritize_interested}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_prioritize_interested: e.target.checked ? 1 : 0 }))}
+                      className="accent-[#C9862B]" />
+                    Prioritize interested calls during audit selection
+                  </label>
                   <div className="col-span-2 text-[10px] text-[#6B7385]">
-                    Jab enable ho, toh sirf selected categories par audit apply hoga aur interested calls ko priority se audit karaya ja sakta hai.
+                    When enabled, audits are limited to the selected categories. The two counts define the required allocation; their total should match the auto total above.
                   </div>
                 </div>
               )}

@@ -64,6 +64,7 @@ export default function Topbar() {
     setExporting(true)
     const params = new URLSearchParams()
     if (clientId && clientId !== 'all') params.set('client_id', clientId)
+    if (clientType) params.set('client_type', clientType)
     if (fromDate) params.set('from_date', fromDate)
     if (toDate) params.set('to_date', toDate)
 
@@ -79,6 +80,7 @@ export default function Topbar() {
     setExporting(true)
     const params = new URLSearchParams()
     if (clientId && clientId !== 'all') params.set('client_id', clientId)
+    if (clientType) params.set('client_type', clientType)
     const url = `/api/reports/monthly-audit/export?${params.toString()}`
     window.open(url, '_blank')
     setTimeout(() => {

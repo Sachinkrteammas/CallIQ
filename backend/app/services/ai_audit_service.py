@@ -12,6 +12,7 @@ from app.services.audit_params import (
     slugify,
 )
 from app.services.scoring_service import derive_scoring, normalize_section_scores
+from app.services.audit_diagnostics import audit_diagnostics
 
 
 def _extract_json(content: str) -> Dict[str, Any]:
@@ -337,6 +338,74 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+_LEGACY_SECTION_KEYS = (
+    "opening", "communication", "probing_resolution", "process_compliance",
+    "closure", "customer_understanding", "resolution_quality",
+    "call_control", "process_adherence", "closing",
+)
+
+
+def _sections_from_legacy_fields(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Support legacy prompts whose model returns top-level section scores."""
+    sections: Dict[str, Dict[str, Any]] = {}
+    for key in _LEGACY_SECTION_KEYS:
+        raw = data.get(key)
+        if raw is None:
+            continue
+
+        score = None
+        max_score = None
+        if isinstance(raw, dict):
+            score = raw.get("score")
+            max_score = raw.get("max_score")
+        elif isinstance(raw, (int, float)):
+            score = raw
+
+        if score is None:
+            continue
+        score = _to_float(score)
+        if max_score is None:
+            # Legacy prompts score each section out of 5.
+            max_score = 5.0 if 0 <= score <= 5 else 100.0
+        max_score = _to_float(max_score, 5.0) or 5.0
+
+        percentage = raw.get("percentage") if isinstance(raw, dict) else None
+        if percentage is None:
+            percentage = (score / max_score) * 100 if max_score else score
+        percentage = _clamp(_to_float(percentage))
+
+        sections[key] = {
+            "score": round(_clamp(score, 0, max_score), 1),
+            "max_score": max_score,
+            "percentage": round(percentage, 1),
+            "label": pretty_label(key),
+        }
+    return sections
+
+
+def _critical_parameter_failures(
+    sections: Dict[str, Any],
+    prompt_config: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Highlight critical parameters/questions that scored below 80%."""
+    failures: List[Dict[str, Any]] = []
+    for meta in parameter_meta_from_config(prompt_config):
+        if not meta.get("critical"):
+            continue
+        section = sections.get(meta["key"]) or {}
+        percentage = _to_float(section.get("percentage"), 0.0)
+        if percentage < 80:
+            detail = f"Scored {percentage:.1f}% on a critical parameter (minimum 80%)."
+            if meta.get("critical_questions"):
+                detail += " Affected: " + ", ".join(meta["critical_questions"])
+            failures.append({
+                "name": meta["label"],
+                "detail": detail,
+                "percentage": percentage,
+            })
+    return failures
+
+
 def _normalize_audit_json(
     audit_json: Dict[str, Any],
     prompt_config: Optional[Dict[str, Any]] = None,
@@ -347,6 +416,8 @@ def _normalize_audit_json(
     # Prompt Builder returns `parameter_scores`; legacy prompts return `sections`.
     if not isinstance(data.get("sections"), dict) or not data.get("sections"):
         converted = _sections_from_parameter_scores(data, meta)
+        if not converted:
+            converted = _sections_from_legacy_fields(data)
         if converted:
             data["sections"] = converted
 
@@ -388,6 +459,14 @@ def _normalize_audit_json(
     if "fatal" not in payload:
         payload["fatal"] = int(fatal_flag)
     payload.setdefault("areas_for_improvement", [])
+
+    # ═══ FATAL RULES / CRITICAL PARAMETER DIAGNOSTICS ═══
+    fatal_errors, critical_failures = audit_diagnostics(data)
+    critical_failures.extend(
+        _critical_parameter_failures(payload.get("sections") or {}, prompt_config)
+    )
+    payload["fatal_errors"] = fatal_errors
+    payload["critical_failures"] = critical_failures
 
     # ═══ SALES CLASSIFICATION ═══
     # Only recompute when the model actually returned the classification
@@ -463,6 +542,7 @@ async def run_ai_audit(
     transcript: str = "",
     voice_mail: bool = False,
     prompt_config: Optional[Dict[str, Any]] = None,
+    use_mock: bool = False,
 ) -> Dict[str, Any]:
     if voice_mail:
         return {}
@@ -503,8 +583,8 @@ async def run_ai_audit(
         except Exception as e:
             print(f"[ai_audit] FAIL OpenRouter failed: {e}")
 
-    # Priority 3: Mock
-    if settings.llm_mock_enabled:
+    # Priority 3: Mock (only when explicitly enabled)
+    if settings.llm_mock_enabled or use_mock:
         print("[ai_audit] Using MOCK response")
         return _normalize_audit_json(_mock_audit_response(prompt_config), prompt_config)
 
@@ -512,3 +592,40 @@ async def run_ai_audit(
         "No LLM provider available. Set OPENAI_API_KEY, OPENROUTER_API_KEY "
         "or LLM_MOCK_ENABLED=true"
     )
+
+
+async def run_structured_prompt(prompt: str) -> Dict[str, Any]:
+    """Run a non-audit JSON task (e.g. SOP -> prompt generation).
+
+    Unlike run_ai_audit this does not append the sales supplement or force the
+    audit-score schema onto the response, so generation keys such as `sections`
+    and `prompt_text` survive intact.
+    """
+    settings = get_settings()
+    template = (prompt or "").strip()
+    if not template:
+        return {}
+
+    if settings.openai_api_key:
+        try:
+            raw = await _run_openai(
+                template, settings.openai_api_key,
+                settings.openai_model, settings.openai_base_url,
+            )
+            if raw:
+                return raw
+        except Exception as e:
+            print(f"[ai_audit] structured OpenAI failed: {e}")
+
+    if settings.openrouter_api_key:
+        try:
+            raw = await _run_openrouter(
+                template, settings.openrouter_api_key,
+                settings.openrouter_model, settings.openrouter_base_url,
+            )
+            if raw:
+                return raw
+        except Exception as e:
+            print(f"[ai_audit] structured OpenRouter failed: {e}")
+
+    return {}

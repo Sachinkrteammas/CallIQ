@@ -2,9 +2,17 @@
 
 const api = axios.create({ baseURL: '/api' })
 
+// Set by ClientProvider. Every GET then carries the active Sales/Service scope,
+// so exports and dashboards cannot mix client types.
+let activeClientType = null
+export const setApiClientType = (type) => { activeClientType = type || null }
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
+  if (activeClientType && (config.method || 'get').toLowerCase() === 'get') {
+    config.params = { client_type: activeClientType, ...(config.params || {}) }
+  }
   return config
 })
 
@@ -39,7 +47,7 @@ export const getInsights = () => api.get('/kpis/insights').then(r => r.data)
 export const getTrend = () => api.get('/kpis/trend').then(r => r.data)
 
 export const getDistribution = (params = {}) => api.get('/conversation/distribution', { params }).then(r => r.data)
-export const getHeatmap = () => api.get('/conversation/heatmap').then(r => r.data)
+export const getHeatmap = (params = {}) => api.get('/conversation/heatmap', { params }).then(r => r.data)
 export const getFindings = (params = {}) => api.get('/conversation/findings', { params }).then(r => r.data)
 
 export const listCalls = (params = {}) => api.get('/calls', { params }).then(r => r.data)
@@ -108,9 +116,20 @@ export const listAiPrompts = (clientId) =>
 export const getAiPrompt = (id) => api.get(`/settings/ai-prompts/${id}`).then(r => r.data)
 export const createAiPrompt = (payload) => api.post('/settings/ai-prompts', payload).then(r => r.data)
 export const updateAiPrompt = (id, payload) => api.patch(`/settings/ai-prompts/${id}`, payload).then(r => r.data)
-export const activateAiPrompt = (id) => api.post(`/settings/ai-prompts/${id}/activate`).then(r => r.data)
+export const activateAiPrompt = (id, maxCalls = 10) => api.post(`/settings/ai-prompts/${id}/activate`, null, { params: { max_calls: maxCalls } }).then(r => r.data)
+export const getLatestPipelineRun = (clientId) => api.get('/settings/ai-prompts/runs/latest', { params: { client_id: clientId } }).then(r => r.data)
+export const getPipelineRun = (runId) => api.get(`/settings/ai-prompts/runs/${runId}`).then(r => r.data)
 export const deleteAiPrompt = (id) => api.delete(`/settings/ai-prompts/${id}`).then(r => r.data)
 export const testAiPrompt = (payload) => api.post('/settings/ai-prompts/test', payload).then(r => r.data)
+export const testAiPromptAudio = ({ clientId, file, promptText, config, note }) => {
+  const fd = new FormData()
+  fd.append('client_id', clientId)
+  fd.append('file', file)
+  if (promptText) fd.append('prompt_text', promptText)
+  if (config) fd.append('config', JSON.stringify(config))
+  if (note) fd.append('note', note)
+  return api.post('/settings/ai-prompts/test-audio', fd, { headers: { 'Content-Type': undefined } }).then(r => r.data)
+}
 export const listPromptDocuments = (clientId) =>
   api.get('/settings/ai-prompts/documents', { params: clientId ? { client_id: clientId } : {} }).then(r => r.data)
 export const uploadPromptDocuments = (clientId, files) => {
@@ -124,6 +143,14 @@ export const generatePromptFromDocs = (clientId) => {
   fd.append('client_id', clientId)
   return api.post('/settings/ai-prompts/generate-from-docs', fd, { headers: { 'Content-Type': undefined } }).then(r => r.data)
 }
+export const replacePromptDocument = (clientId, docId, file) => {
+  const fd = new FormData()
+  fd.append('client_id', clientId)
+  fd.append('file', file)
+  return api.patch(`/settings/ai-prompts/documents/${docId}`, fd, { headers: { 'Content-Type': undefined } }).then(r => r.data)
+}
+export const deletePromptDocument = (clientId, docId) =>
+  api.delete(`/settings/ai-prompts/documents/${docId}`, { params: { client_id: clientId } }).then(r => r.data)
 
 export const listClients = () => api.get('/clients').then(r => r.data)
 export const listAllClients = () => api.get('/clients/list').then(r => r.data)
@@ -194,6 +221,7 @@ export const exportAuditsReport = (params = {}) =>
 
 // Issue 6 / 10: live pipeline triggers + status
 export const triggerPipeline = (params = {}) => api.post('/ops/pipeline/trigger', null, { params }).then(r => r.data)
+export const runIqAudit = (payload) => api.post('/ops/iq-audit', payload).then(r => r.data)
 export const getPipelineStatus = (params = {}) => api.get('/ops/pipeline/status', { params }).then(r => r.data)
 
 export const getClientSettings = async (clientId) => {

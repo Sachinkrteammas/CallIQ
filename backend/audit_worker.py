@@ -2,7 +2,8 @@ import argparse
 import asyncio
 import sys
 import time
-from typing import Optional, Tuple
+from datetime import datetime, timedelta
+from typing import List, Optional, Tuple
 
 from sqlalchemy import select, text
 
@@ -14,6 +15,7 @@ from app.services.audit_params import coerce_json
 from app.services.scoring_service import derive_scoring
 
 _MIGRATION_DONE = False
+_LAST_STATS: dict = {}
 
 
 def _safe_console() -> None:
@@ -155,7 +157,16 @@ def _apply_audit_fields(audit: CallAudit, call: CallLog, audit_json: dict) -> No
     audit.order_information = order_information
 
 
-def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = False) -> int:
+def run_once(
+    limit: int = 20,
+    client_id: Optional[int] = None,
+    reaudit: bool = False,
+    max_age_hours: int = 0,
+    call_ids: Optional[List[str]] = None,
+    use_mock: bool = False,
+) -> int:
+    global _LAST_STATS
+    _LAST_STATS = {}
     db = SessionLocal()
     try:
         _run_migrations(db)
@@ -175,8 +186,13 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
                 CallLog.voice_mail == False,  # ← Skip voicemail
             )
         )
+        if call_ids:
+            query = query.where(CallLog.call_id.in_(list(call_ids)))
         if client_id is not None:
             query = query.where(CallLog.client_id == client_id)
+        if max_age_hours and max_age_hours > 0:
+            since = datetime.now() - timedelta(hours=int(max_age_hours))
+            query = query.where(CallLog.start_time >= since)
         if not reaudit:
             query = query.where(CallAudit.id.is_(None))
         else:
@@ -189,6 +205,8 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
         processed = 0
         skipped = 0
         skip_reasons = {"no_prompt": 0, "empty": 0, "error": 0}
+        errors: List[str] = []
+        audited_calls: List[str] = []
 
         for call in calls:
             prompt_text, prompt_config = _load_prompt(db, call.client_id)
@@ -206,6 +224,7 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
                         call.transcript or "",
                         call.voice_mail,
                         prompt_config=prompt_config,
+                        use_mock=use_mock,
                     )
                 )
                 if not audit_json:
@@ -217,6 +236,7 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
                 print(f"[audit_worker] FAIL {call.call_id}: {exc}")
                 skipped += 1
                 skip_reasons["error"] += 1
+                errors.append(f"{call.call_id}: {exc}")
                 continue
 
             existing = db.scalar(
@@ -259,14 +279,26 @@ def run_once(limit: int = 20, client_id: Optional[int] = None, reaudit: bool = F
                 f"| score={audit_json.get('total_score')}"
             )
             processed += 1
+            audited_calls.append(call.call_id)
 
         db.commit()
+        _LAST_STATS = {
+            "processed": processed,
+            "skipped": skipped,
+            "skip_reasons": skip_reasons,
+            "errors": errors[:50],
+            "audited_calls": audited_calls,
+        }
         print(f"[audit_worker] Done. Processed={processed}, Skipped={skipped} {skip_reasons}")
         if processed == 0 and len(calls) == 0:
             print("[audit_worker] Hint: calls need non-empty transcript (not [NO_SPEECH]/[RECORDING_MISSING]/[TRANSCRIPT_FAILED]), voice_mail=False, and an Active prompt for the client.")
         return processed
     finally:
         db.close()
+
+
+def get_last_stats() -> dict:
+    return dict(_LAST_STATS)
 
 
 def main() -> None:
@@ -281,15 +313,32 @@ def main() -> None:
         action="store_true",
         help="Re-audit calls that already have an audit row (updates in place).",
     )
+    parser.add_argument(
+        "--max-age-hours",
+        type=int,
+        default=0,
+        help="Only audit calls newer than N hours (0 = no limit).",
+    )
+    parser.add_argument(
+        "--use-mock",
+        action="store_true",
+        help="Use the deterministic mock evaluator when no LLM provider responds.",
+    )
     args = parser.parse_args()
 
     if args.once:
-        run_once(limit=args.limit, client_id=args.client_id, reaudit=args.reaudit)
+        run_once(
+            limit=args.limit, client_id=args.client_id, reaudit=args.reaudit,
+            max_age_hours=args.max_age_hours, use_mock=args.use_mock,
+        )
         return
 
     while True:
         try:
-            run_once(limit=args.limit, client_id=args.client_id, reaudit=args.reaudit)
+            run_once(
+                limit=args.limit, client_id=args.client_id, reaudit=args.reaudit,
+                max_age_hours=args.max_age_hours, use_mock=args.use_mock,
+            )
         except Exception as exc:
             print(f"[audit_worker] error: {exc}")
         time.sleep(max(1, args.interval))

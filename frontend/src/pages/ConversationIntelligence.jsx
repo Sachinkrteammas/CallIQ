@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, SectionTitle, Sparkline, Trend, SeverityBadge, EmptyState } from '../components/shared.jsx'
-import { DISTRIBUTION, HEATMAP, AI_FINDINGS, TREND_DATA } from '../data/mock.js'
+import { DISTRIBUTION, TREND_DATA } from '../data/mock.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
 import { getClientVADMetrics, triggerVADProcessing, getFindings, getHeatmap } from '../api/client.js'
 import {
@@ -31,6 +31,8 @@ const VAD_METRICS = [
 export default function ConversationIntelligence() {
   const [hoverCell, setHoverCell] = useState(null)
   const [heatmapView, setHeatmapView] = useState('team')
+  const [heatmapData, setHeatmapData] = useState({ behaviours: [], rows: [] })
+  const [heatmapLoading, setHeatmapLoading] = useState(false)
   const [vadData, setVadData] = useState([])
   const [vadLoading, setVadLoading] = useState(false)
   const [vadError, setVadError] = useState(null)
@@ -61,20 +63,9 @@ export default function ConversationIntelligence() {
 
   const [findings, setFindings] = useState([])
   const [findingsLoading, setFindingsLoading] = useState(false)
-  const [heatmap, setHeatmap] = useState(null)
 
-  const fetchHeatmap = useCallback(() => {
-    getHeatmap()
-      .then((res) => setHeatmap(res || null))
-      .catch(() => setHeatmap(null))
-  }, [])
-
-  useEffect(() => {
-    fetchHeatmap()
-  }, [fetchHeatmap])
-
-  const heatmapRows = heatmap?.rows || HEATMAP.rows
-  const heatmapBehaviours = heatmap?.behaviours || HEATMAP.behaviours
+  const heatmapRows = heatmapData.rows || []
+  const heatmapBehaviours = heatmapData.behaviours || []
 
   // Fetch VAD metrics from the real API when client or dates change
   const fetchVADMetrics = useCallback(() => {
@@ -103,10 +94,26 @@ export default function ConversationIntelligence() {
       .finally(() => setFindingsLoading(false))
   }, [clientId, fromDate, toDate, clientType])
 
+  // Heatmap rows are the configured processes for the selected client/type.
+  const fetchHeatmap = useCallback(() => {
+    setHeatmapLoading(true)
+    getHeatmap({
+      client_id: clientId || 'all',
+      from_date: fromDate,
+      to_date: toDate,
+      client_type: clientType,
+      view: heatmapView,
+    })
+      .then((res) => setHeatmapData(res || { behaviours: [], rows: [] }))
+      .catch(() => setHeatmapData({ behaviours: [], rows: [] }))
+      .finally(() => setHeatmapLoading(false))
+  }, [clientId, fromDate, toDate, clientType, heatmapView])
+
   useEffect(() => {
     fetchVADMetrics()
     fetchFindings()
-  }, [fetchVADMetrics, fetchFindings])
+    fetchHeatmap()
+  }, [fetchVADMetrics, fetchFindings, fetchHeatmap])
 
   // Trigger VAD processing on the backend
   const handleProcessVAD = useCallback(async () => {
@@ -163,6 +170,17 @@ export default function ConversationIntelligence() {
     if (!def) return metric.benchmark
     if (def.unit === 's') return `${metric.benchmark}s`
     return `${metric.benchmark}${def.unit}`
+  }
+
+  // Drill from a heatmap cell into the calls for that process and behaviour.
+  const openHeatmapCell = (row, behaviour) => {
+    const label = row.name || row.team
+    const params = new URLSearchParams()
+    if (heatmapView === 'agent') params.set('agent_id', label)
+    else params.set('process', label)
+    if (behaviour) params.set('behaviour', behaviour)
+    if (clientId && clientId !== 'all') params.set('client_id', String(clientId))
+    navigate(`/calls?${params.toString()}`)
   }
 
   return (
@@ -485,48 +503,72 @@ export default function ConversationIntelligence() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-[15px] font-semibold text-[#1D2433]">Behaviour Heatmap</h3>
           <div className="flex gap-1 bg-[#F7F4EE] rounded-lg p-0.5">
-            {['team', 'agent', 'queue'].map((v) => (
+            {[
+              { key: 'team', label: 'Process' },
+              { key: 'agent', label: 'Agent' },
+              { key: 'queue', label: 'Queue' },
+            ].map((v) => (
               <button
-                key={v}
-                onClick={() => setHeatmapView(v)}
-                className={`text-xs font-semibold px-3 py-1 rounded-md transition ${heatmapView === v ? 'bg-white shadow text-[#1D2433]' : 'text-[#6B7385]'}`}
+                key={v.key}
+                onClick={() => setHeatmapView(v.key)}
+                className={`text-xs font-semibold px-3 py-1 rounded-md transition ${heatmapView === v.key ? 'bg-white shadow text-[#1D2433]' : 'text-[#6B7385]'}`}
               >
-                {v.charAt(0).toUpperCase() + v.slice(1)}
+                {v.label}
               </button>
             ))}
           </div>
         </div>
+        {heatmapLoading && (
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] text-[#6B7385]">
+            <RefreshCw size={12} className="animate-spin" /> Loading configured processes…
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-xs border-separate border-spacing-1">
             <thead>
               <tr>
-                <th className="text-left text-[#6B7385] font-semibold p-2 w-40 capitalize">{heatmapView}</th>
+                <th className="text-left text-[#6B7385] font-semibold p-2 w-40">
+                  {heatmapView === 'team' ? 'Process' : heatmapView.charAt(0).toUpperCase() + heatmapView.slice(1)}
+                </th>
                 {heatmapBehaviours.map((b) => (
                   <th key={b} className="text-[#6B7385] font-semibold p-2 text-center whitespace-nowrap">{b}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {heatmapRows.map((row) => (
-                <tr key={row.team}>
-                  <td className="p-2 font-semibold text-[#1D2433]">{row.team}</td>
-                  {heatmapBehaviours.map((b) => {
-                    const level = row.cells[b]
-                    const key = `${row.team}-${b}`
-                    return (
-                      <td key={b} className="p-1 text-center">
-                        <button
-                          onMouseEnter={() => setHoverCell(key)}
-                          onMouseLeave={() => setHoverCell(null)}
-                          onClick={() => navigate(`/calls?team=${encodeURIComponent(row.team)}`)}
-                          className={`w-10 h-8 rounded-md ${levelColor[level]} ${hoverCell === key ? 'ring-2 ring-[#16213E] scale-110' : ''} transition-all`}
-                          title={`${row.team} · ${b}: ${level}`}
-                        />
-                      </td>
-                    )
-                  })}
+              {heatmapRows.map((row) => {
+                const label = row.name || row.team
+                return (
+                  <tr key={label}>
+                    <td className="p-2 font-semibold text-[#1D2433]">
+                      {label}
+                      {row.calls ? <span className="ml-1 text-[10px] font-normal text-[#6B7385]">({row.calls})</span> : null}
+                    </td>
+                    {heatmapBehaviours.map((b) => {
+                      const level = row.cells?.[b]
+                      const key = `${label}-${b}`
+                      return (
+                        <td key={b} className="p-1 text-center">
+                          <button
+                            onMouseEnter={() => setHoverCell(key)}
+                            onMouseLeave={() => setHoverCell(null)}
+                            onClick={() => openHeatmapCell(row, b)}
+                            className={`w-10 h-8 rounded-md ${levelColor[level] || 'bg-[#F1F1F4]'} ${hoverCell === key ? 'ring-2 ring-[#16213E] scale-110' : ''} transition-all`}
+                            title={`${label} · ${b}: ${level || 'no data'}`}
+                          />
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
+              {!heatmapLoading && heatmapRows.length === 0 && (
+                <tr>
+                  <td colSpan={(heatmapBehaviours.length || 0) + 1} className="p-3 text-center text-[#6B7385]">
+                    No processes configured for this filter.
+                  </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
@@ -534,7 +576,7 @@ export default function ConversationIntelligence() {
           <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-[#1C9A6C] inline-block" /> Good</span>
           <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-[#C9862B] inline-block" /> Needs Attention</span>
           <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-[#D14343] inline-block" /> Critical</span>
-          <span className="ml-auto">Click a cell to view related calls</span>
+          <span className="ml-auto">Click a cell to view calls for that process and behaviour</span>
         </div>
       </Card>
 

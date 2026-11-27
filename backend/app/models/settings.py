@@ -37,9 +37,16 @@ class Setting(Base):
     enable_sales_category_filter = Column(Integer, default=0)
     sales_interested_values = Column(JSON)
     sales_not_interested_values = Column(JSON)
+    sales_interested_audit_count = Column(Integer, default=0)
+    sales_not_interested_audit_count = Column(Integer, default=0)
+    sales_prioritize_interested = Column(Integer, default=1)
 
     monthly_target = Column(Integer, default=30)
-    monthly_max = Column(Integer, default=60)    # ← NEW
+    monthly_max = Column(Integer, default=60)
     daily_target = Column(Integer, default=1)
-    daily_max = Column(Integer, default=3)       # ← NEW
-    audit_mode = Column(String(20), default='monthly')  # ← NEW (persisted mode)
+    daily_max = Column(Integer, default=3)
+    audit_mode = Column(String(20), default='monthly')
+
+    short_call_count = Column(Integer, default=5)
+    medium_call_count = Column(Integer, default=15)
+    long_call_count = Column(Integer, default=10)
