@@ -8,7 +8,7 @@ Call Explorer and Call Details both need the same answer to:
 Keeping the logic here avoids the two endpoints drifting apart.
 """
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 PLACEHOLDER_STATUSES = {
     "[RECORDING_MISSING]": "Recording Missing",
@@ -74,7 +74,7 @@ def audit_diagnostics(audit_json: Any) -> Tuple[List[Dict[str, Any]], List[Dict[
     return fatal_errors, critical_failures
 
 
-def call_status(has_audit: bool, transcript: Any = None) -> Tuple[str, str | None]:
+def call_status(has_audit: bool, transcript: Any = None) -> Tuple[str, Optional[str]]:
     """Derive the audit status shown in Call Explorer / Call Details."""
     if has_audit:
         return "Completed", None

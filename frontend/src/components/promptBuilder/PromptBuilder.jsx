@@ -12,11 +12,12 @@ import { INITIAL_CONFIG } from './config.js'
 import { validatePrompt, assemblePrompt } from './logic.js'
 import { Field, TextInput, Select } from './ui.jsx'
 import {
-  listAiPrompts, getAiPrompt, createAiPrompt, updateAiPrompt, activateAiPrompt, deleteAiPrompt, getPipelineRun,
+  listAiPrompts, getAiPrompt, createAiPrompt, updateAiPrompt, activateAiPrompt, deleteAiPrompt,
   testAiPrompt, testAiPromptAudio, listPromptDocuments, uploadPromptDocuments, generatePromptFromDocs,
   replacePromptDocument, deletePromptDocument,
 } from '../../api/client.js'
 import { useClientFilter } from '../ClientContext.jsx'
+import PipelineRunStatus from '../PipelineRunStatus.jsx'
 import { BookText, PlayCircle, AudioLines, X } from 'lucide-react'
 import {
   Save, Copy, Check, FileText, ScrollText, ListOrdered, ShieldX, ShieldAlert,
@@ -97,6 +98,7 @@ export default function PromptBuilder() {
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
   const [promptStatus, setPromptStatus] = useState('')
+  const [pipelineRun, setPipelineRun] = useState(null)
 
   // Issue 1 & 5: prompt testing (transcript or audio) + document upload
   const [docs, setDocs] = useState([])
@@ -438,25 +440,14 @@ export default function PromptBuilder() {
     }
   }
 
+  // PipelineRunStatus owns the polling for this run and publishes progress /
+  // completion on window so other screens (e.g. Call Explorer) stay in sync.
   const watchPipeline = (runId, clientId) => {
     if (!runId) return
+    setPipelineRun({ run_id: runId, client_id: clientId })
     window.dispatchEvent(new CustomEvent('calliq:pipeline-start', {
       detail: { run_id: runId, client_id: clientId },
     }))
-    const poll = async () => {
-      try {
-        const run = await getPipelineRun(runId)
-        if (['completed', 'failed'].includes(run.status)) {
-          window.dispatchEvent(new CustomEvent('calliq:pipeline-complete', { detail: run }))
-        } else {
-          window.setTimeout(poll, 2000)
-        }
-      } catch {
-        // A transient polling error should not break the activation flow.
-        window.setTimeout(poll, 3000)
-      }
-    }
-    window.setTimeout(poll, 1500)
   }
 
   const handleActivate = async () => {
@@ -467,11 +458,6 @@ export default function PromptBuilder() {
     if (val.errors.length > 0) {
       setActiveSection('workflow')
       notify('Fix the validation issues below before activation.', 'err')
-      return
-    }
-    if (!testResult?.ok) {
-      document.getElementById('prompt-testing')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      notify('Run a successful test against this prompt before activation.', 'err')
       return
     }
     setSaving(true)
@@ -528,14 +514,15 @@ export default function PromptBuilder() {
         }
         notify(`"${prompt.name}" ${prompt.version} deactivated (Draft)`)
       } else {
+        // Any saved version can be activated directly — no need to load it or
+        // run a test first. Activating also archives the previous Active one.
         const isCurrent = String(prompt.id) === String(promptId)
-        if (!isCurrent || !testResult?.ok) {
-          notify('Load this prompt and run a successful test before activating it.', 'err')
-          return
-        }
         const res = await activateAiPrompt(prompt.id)
-        setPromptStatus('Active')
-        setConfig((c) => ({ ...c, status: 'Active' }))
+        setPromptStatus((prev) => (isCurrent ? 'Active' : prev === 'Active' ? 'Archived' : prev))
+        setConfig((c) => ({
+          ...c,
+          status: isCurrent ? 'Active' : (c.status === 'Active' ? 'Archived' : c.status),
+        }))
         notify(`"${res.name}" ${res.version} is now ACTIVE for ${res.client_name || `client #${res.client_id}`}. The audit service will use it.`)
         watchPipeline(res.run_id, res.client_id)
       }
@@ -719,6 +706,10 @@ export default function PromptBuilder() {
           </div>
         </div>
       </div>
+
+      {pipelineRun?.run_id && (
+        <PipelineRunStatus runId={pipelineRun.run_id} />
+      )}
 
       {/* Progress-driven prompt creation workflow */}
       <div className="bg-white border border-[#E7E2D8] rounded-xl p-5">
@@ -1032,7 +1023,7 @@ export default function PromptBuilder() {
               <Card>
                 <SectionHeading icon={GitBranch} title="Build Workflow" desc="Follow the five progress-driven steps at the top of this page." />
                 <div className="text-xs text-[#6B7385]">
-                  Start with documents, generate a draft, customise the sections, run a successful test, then save and activate. Each step is marked complete automatically.
+                  Start with documents, generate a draft, customise the sections, test (optional), then save and activate. Each step is marked complete automatically.
                 </div>
               </Card>
               <Card>

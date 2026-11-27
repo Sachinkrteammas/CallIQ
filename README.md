@@ -44,8 +44,14 @@ calliq/
 
 ## Prerequisites
 
-- **Python 3.10+**
+- **Python 3.8+** (production runs 3.8 — keep backend code 3.8-compatible)
 - **Node.js 18+** and npm
+
+> Backend code must avoid 3.10+ syntax: use `Optional[str]` / `Union[int, str]`
+> instead of `str | None` / `int | str`, `List[str]` / `Dict[str, int]` instead of
+> `list[str]` / `dict[str, int]`, and no `match` / `case` statements. Files that
+> already use PEP 604/585 hints in annotations do so behind
+> `from __future__ import annotations`.
 
 ## 1. Run the backend (FastAPI)
 

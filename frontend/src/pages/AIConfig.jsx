@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, SectionTitle } from '../components/shared.jsx'
+import PipelineRunStatus from '../components/PipelineRunStatus.jsx'
 import { Settings, AlertTriangle, Sliders, FileText, Plus, Trash2, Check, X, Wand2 } from 'lucide-react'
 import { useClientFilter } from '../components/ClientContext.jsx'
 import {
   listAiPrompts, getAiPrompt, createAiPrompt, updateAiPrompt,
-  activateAiPrompt, deleteAiPrompt
+  activateAiPrompt, deleteAiPrompt, getLatestPipelineRun
 } from '../api/client.js'
 
 const QUALITY_PARAMS = [
@@ -35,7 +36,21 @@ export default function AIConfig() {
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState(null)
+  const [pipelineRunId, setPipelineRunId] = useState(null)
   const detailReq = useRef(0)
+
+  // Show the latest fetch -> transcribe -> audit run whenever this client has
+  // an active prompt, even if activation happened on another screen.
+  const loadLatestRun = async (cid) => {
+    if (!cid || cid === 'all') { setPipelineRunId(null); return }
+    try {
+      const run = await getLatestPipelineRun(cid)
+      setPipelineRunId(run?.id || null)
+    } catch {
+      // 404 simply means this client has never run the pipeline yet.
+      setPipelineRunId(null)
+    }
+  }
 
   const [form, setForm] = useState({
     scoring_mode: 'default',         // 'default' | 'custom'
@@ -96,6 +111,7 @@ export default function AIConfig() {
       setPrompts([])
       setSelectedPrompt(null)
       setPromptDetail(null)
+      setPipelineRunId(null)
       setLoadingPrompts(false)
       return
     }
@@ -105,7 +121,11 @@ export default function AIConfig() {
     setPrompts([])
     setSelectedPrompt(null)
     setPromptDetail(null)
+    setPipelineRunId(null)
     setNotice(null)
+    getLatestPipelineRun(clientId)
+      .then((run) => { if (!cancelled) setPipelineRunId(run?.id || null) })
+      .catch(() => { if (!cancelled) setPipelineRunId(null) })
     listAiPrompts(clientId)
       .then((res) => {
         if (cancelled) return
@@ -137,6 +157,8 @@ export default function AIConfig() {
     if (!id) return
     setSelectedPrompt(id)
     setNotice(null)
+    const chosen = prompts.find((p) => p.id === id)
+    loadLatestRun(chosen?.status === 'Active' ? clientId : null)
     loadPromptDetail(id)
   }
 
@@ -203,9 +225,15 @@ export default function AIConfig() {
     try {
       const updated = await activateAiPrompt(selectedPrompt)
       applyDetail(updated)
+      setPipelineRunId(updated?.run_id || null)
+      if (updated?.run_id) {
+        window.dispatchEvent(new CustomEvent('calliq:pipeline-start', {
+          detail: { run_id: updated.run_id, client_id: updated.client_id || clientId },
+        }))
+      } else loadLatestRun(clientId)
       const list = await listAiPrompts(clientId)
       setPrompts(list || [])
-      setNotice({ type: 'success', text: 'Prompt activated' })
+      setNotice({ type: 'success', text: 'Prompt activated · fetch, transcription and audit started' })
     } catch (e) {
       setNotice({ type: 'error', text: e?.response?.data?.detail || 'Activation failed' })
     }
@@ -241,6 +269,8 @@ export default function AIConfig() {
           notice.type === 'success' ? 'bg-[#E7F7EF] text-[#1C9A6C]' : 'bg-[#FBE9E9] text-[#D14343]'
         }`}>{notice.text}</div>
       )}
+
+      {pipelineRunId && <PipelineRunStatus runId={pipelineRunId} />}
 
       {/* Client + Prompt Selector */}
       <Card>

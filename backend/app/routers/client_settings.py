@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
@@ -142,7 +142,7 @@ def _build_agent_details(client: Client, db2: Optional[Session], db3: Optional[S
     campaigns = _split_csv(client.campaigns)
     ingroups = _split_csv(client.ingroups)
 
-    all_users: set[str] = set()
+    all_users: Set[str] = set()
 
     if db3 is not None:
         filters = ingroups if ingroups else campaigns

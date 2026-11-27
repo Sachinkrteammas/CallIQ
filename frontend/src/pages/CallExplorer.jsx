@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, SeverityBadge, EmptyState } from '../components/shared.jsx'
 import { listCalls, runIqAudit } from '../api/client.js'
 import { useClientFilter } from '../components/ClientContext.jsx'
+import { pipelineStageLabel } from '../components/PipelineRunStatus.jsx'
 import {
   Search, ChevronLeft, ChevronRight, ArrowUpDown, Calendar,
   RefreshCw, Building2, Filter, X, AlertTriangle, ShieldAlert, ClipboardCheck
@@ -133,7 +134,14 @@ export default function CallExplorer() {
   useEffect(() => {
     const onStart = () => {
       setAuditing(true)
-      setAuditMessage('IQ audit pipeline started…')
+      setAuditMessage('IQ audit pipeline started · fetching calls…')
+    }
+    const onProgress = (event) => {
+      const run = event.detail || {}
+      if (['queued', 'running'].includes(run.status)) {
+        setAuditing(true)
+        setAuditMessage(`IQ audit pipeline running · ${pipelineStageLabel(run.stage)}…`)
+      }
     }
     const onComplete = (event) => {
       setAuditing(false)
@@ -146,9 +154,11 @@ export default function CallExplorer() {
       fetchCalls()
     }
     window.addEventListener('calliq:pipeline-start', onStart)
+    window.addEventListener('calliq:pipeline-progress', onProgress)
     window.addEventListener('calliq:pipeline-complete', onComplete)
     return () => {
       window.removeEventListener('calliq:pipeline-start', onStart)
+      window.removeEventListener('calliq:pipeline-progress', onProgress)
       window.removeEventListener('calliq:pipeline-complete', onComplete)
     }
   }, [fetchCalls])

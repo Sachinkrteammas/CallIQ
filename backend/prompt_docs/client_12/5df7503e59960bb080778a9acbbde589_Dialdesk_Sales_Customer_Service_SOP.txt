@@ -1,0 +1,149 @@
+DIALDESK SALES
+STANDARD OPERATING PROCEDURE (SOP)
+Customer Service and Outbound Sales Call Handling
+Document Version: 1.0
+Department: Sales / Customer Experience
+Effective Date: 27 November 2026
+
+1. PURPOSE
+This SOP defines the mandatory process for handling outbound sales calls. It is intended to ensure that agents communicate professionally, understand customer needs, provide accurate product information, obtain customer consent, and record outcomes correctly.
+
+2. SCOPE
+This SOP applies to all agents making outbound sales calls on behalf of Dialdesk Sales. It covers the opening, customer verification, needs discovery, product explanation, objection handling, consent, call closure, and post-call disposition.
+
+3. REQUIRED CALL FLOW
+
+3.1 Opening and Introduction
+The agent must:
+- Greet the customer politely.
+- Introduce themselves using their first name.
+- Clearly identify the company or campaign they represent.
+- State the purpose of the call in simple language.
+- Ask whether it is a convenient time to speak.
+
+Example:
+"Hello, good morning. My name is Rahul, and I'm calling from Dialdesk Sales. I'm calling to share information about our service. Is this a convenient time to speak?"
+
+3.2 Customer Verification and Privacy
+- Before discussing account-specific or personal information, verify the customer's identity using the approved verification method.
+- Ask only for information required by the approved process.
+- Never ask the customer to disclose an OTP, password, PIN, CVV, or full payment-card credentials.
+- Do not disclose one customer's personal or account information to another person.
+- If the customer is not the intended person, do not reveal the reason for the call or any confidential details. Follow the approved callback or contact procedure.
+
+3.3 Needs Discovery
+The agent should ask relevant questions to understand the customer's requirements.
+- Ask clear, relevant, non-leading questions.
+- Listen without interrupting.
+- Confirm the customer's main requirement before recommending a product or service.
+- Do not assume eligibility, budget, intent, or purchase readiness.
+
+3.4 Product or Service Explanation
+The agent must:
+- Explain the product or service accurately using approved information.
+- Clearly communicate relevant features, price, fees, conditions, limitations, and applicable terms.
+- Avoid unsupported guarantees, exaggerated claims, or misleading statements.
+- Never invent discounts, offers, delivery dates, approvals, or benefits.
+- If an answer is not known, tell the customer that it needs to be verified and follow the escalation process.
+- Do not hide material charges or conditions.
+
+3.5 Objection Handling
+- Allow the customer to explain the objection.
+- Acknowledge the concern respectfully.
+- Provide a factual response relevant to the concern.
+- Do not argue, pressure, threaten, shame, or repeatedly push after a clear refusal.
+- If the customer asks not to be contacted again, acknowledge the request and follow the approved Do Not Call (DNC) process.
+
+3.6 Customer Consent and Sales Confirmation
+Before recording a sale or commitment:
+- Confirm that the customer understands the product or service being offered.
+- Confirm the applicable price and material terms.
+- Ask for clear and voluntary acceptance.
+- Do not mark a sale as confirmed based only on interest, silence, or an agent's assumption.
+- Do not submit an order or commitment without the required customer authorization.
+- If the customer is unsure or declines, record the correct outcome without misrepresenting the call.
+
+3.7 Call Closure
+The agent must:
+- Summarize the agreed next step, if any.
+- Explain any callback or follow-up expectation accurately.
+- Ask whether the customer has any final questions.
+- Thank the customer and close politely.
+- Never promise a callback or resolution unless it can be arranged through the approved process.
+
+4. MANDATORY COMMUNICATION STANDARDS
+Agents must:
+- Maintain a polite, calm, and professional tone.
+- Use clear language and an appropriate speaking pace.
+- Listen actively and avoid unnecessary interruptions.
+- Avoid abusive, discriminatory, insulting, or threatening language.
+- Avoid arguing with customers.
+- Respect a customer's request to end the call.
+- Never misrepresent their identity, company, product, or authority.
+
+5. FATAL VIOLATIONS
+Any of the following is a critical violation and must be marked as a FATAL failure:
+F1. The agent asks the customer to share an OTP, password, PIN, CVV, or other secret authentication credential.
+F2. The agent knowingly discloses another customer's confidential or personal information.
+F3. The agent deliberately gives materially false information about price, fees, product benefits, eligibility, or guaranteed outcomes.
+F4. The agent places or confirms an order, payment, or commitment without the customer's required consent.
+
+A fatal violation must trigger the configured fatal-failure outcome regardless of the otherwise positive call performance. The evaluator must cite the exact transcript evidence. Do not infer a fatal violation without supporting evidence.
+
+6. HARD FAILURES
+The following are HARD failures:
+H1. The agent fails to provide a meaningful company and self-introduction.
+H2. The agent skips required identity verification before discussing account-specific confidential information.
+H3. The agent fails to disclose a material price, fee, limitation, or condition that is clearly applicable to the offer.
+H4. The agent ignores an explicit request to stop calling or be placed on the Do Not Call list.
+
+Hard failures must be recorded separately from fatal violations and must follow the configured scoring rules.
+
+7. SOFT-SKILL AND QUALITY EXPECTATIONS
+Evaluate the following behaviours:
+- Empathy: acknowledges the customer's situation or concern.
+- Active listening: responds to what the customer actually said.
+- Clarity: explains information in understandable language.
+- Professionalism: remains respectful and composed.
+- Control: guides the conversation without interrupting or pressuring.
+- Accuracy: gives consistent and supported information.
+- Closing: summarizes next steps and ends courteously.
+
+A missed pleasantry or minor wording issue should not automatically be treated as a fatal or hard failure.
+
+8. CALL OUTCOME / DISPOSITION GUIDANCE
+Use the disposition that best matches the actual conversation:
+- CONNECTED: A meaningful conversation took place with the intended customer.
+- NOT CONNECTED: The call did not reach a meaningful conversation with the intended customer.
+- NO ANSWER: The call rang but nobody answered.
+- CALLBACK: The customer requested or agreed to a future call.
+- INTERESTED: The customer expressed genuine interest but did not confirm a purchase.
+- NOT INTERESTED: The customer clearly declined the offer.
+- SALE CONFIRMED: The customer gave the required explicit consent and all required confirmation steps were completed.
+- DNC REQUEST: The customer explicitly requested no further sales calls.
+- WRONG NUMBER: The person reached confirmed that the number does not belong to the intended customer.
+
+Do not classify a call as SALE CONFIRMED merely because the customer asked questions, requested details, or expressed interest.
+
+9. ESCALATION
+Escalate the call or query to the appropriate supervisor/team when:
+- The customer raises a complaint that the agent is not authorized to resolve.
+- Product, pricing, or policy information is unavailable or contradictory.
+- The customer alleges fraud, unauthorized activity, or misuse of personal information.
+- The customer requests a supervisor.
+- The agent is uncertain about the correct process.
+
+The agent must not invent an answer to avoid escalation.
+
+10. AI QUALITY EVALUATION INSTRUCTIONS
+When evaluating a transcript against this SOP:
+- Evaluate only what is supported by the transcript.
+- Do not assume that an action occurred if it is not evidenced.
+- Distinguish between fatal violations, hard failures, and soft-skill deductions.
+- For every failure, quote or identify the exact relevant transcript statement.
+- If evidence is insufficient, mark the criterion as Not Evident or Unable to Determine rather than inventing a violation.
+- Do not penalize the agent for a process step that was not applicable to the call.
+- Return an overall result, criterion-level findings, severity, evidence, and actionable coaching feedback.
+- If the transcript is incomplete, explicitly state that the evaluation is limited by the missing content.
+
+END OF SOP
